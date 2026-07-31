@@ -17,7 +17,7 @@
 ```bash
 # Clone repository
 git clone <repository-url>
-cd vulnerability-scanner
+cd codey-security
 
 # Create virtual environment
 python -m venv venv
