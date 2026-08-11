@@ -1,12 +1,13 @@
 import os
 from dotenv import load_dotenv
+from pydantic import SecretStr
 
 load_dotenv()
 
 class Config:
-    # OpenAI API Configuration
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-    OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    AI_API_KEY = SecretStr(os.getenv("AI_API_KEY", ""))
+    AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.freetheai.xyz/v1")
+    AI_MODEL = os.getenv("AI_MODEL", "min/minimax-m3")
     
     # Supported Languages
     SUPPORTED_LANGUAGES = ["python", "c"]

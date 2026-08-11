@@ -9,7 +9,9 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict
+
+from langchain_openai import ChatOpenAI
 
 from core.parser import CodeParser
 from core.scanner_agent import ScannerAgent
@@ -22,8 +24,25 @@ class VulnerabilityScanner:
     
     def __init__(self):
         self.parser = CodeParser()
-        self.scanner = ScannerAgent()
-        self.verifier = VerifierAgent()
+        llm = None
+        if Config.AI_API_KEY:
+            try:
+                llm = ChatOpenAI(
+                    model=Config.AI_MODEL,
+                    api_key=Config.AI_API_KEY,
+                    base_url=Config.AI_BASE_URL,
+                    temperature=0,
+                    max_completion_tokens=1000,
+                )
+                print(f"✅ LLM initialized with model: {Config.AI_MODEL}")
+            except Exception as e:
+                print(f"⚠️ Failed to initialize LLM: {e}. Falling back to heuristic only.")
+                llm = None
+        else:
+            print("ℹ️ No AI_API_KEY found. Using heuristic-only analysis.")
+        
+        self.scanner = ScannerAgent(llm_client=llm)
+        self.verifier = VerifierAgent(llm_client=llm)
         self.results = []
     
     def scan_file(self, file_path: str) -> AnalysisReport:
@@ -81,7 +100,7 @@ class VulnerabilityScanner:
             vulnerabilities=verified,
             summary=self._generate_summary(verified)
         )
-        
+
         return report
     
     def scan_directory(self, directory: str, recursive: bool = True) -> List[AnalysisReport]:
@@ -121,7 +140,7 @@ class VulnerabilityScanner:
             "by_severity": severity_counts
         }
     
-    def save_report(self, report: AnalysisReport, output_dir: str = None):
+    def save_report(self, report: AnalysisReport, output_dir: str):
         """Save a report to a JSON file."""
         output_dir = output_dir or Config.OUTPUT_DIR
         Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -165,7 +184,10 @@ class VulnerabilityScanner:
                 print(f"      CWE: {vuln.cwe}")
                 print(f"      Location: {vuln.location}")
                 print(f"      Severity: {vuln.severity}")
-                print(f"      Evidence: {vuln.evidence[:100]}...")
+                evidence = vuln.evidence
+                if len(evidence) > 300:
+                    evidence = evidence[:300] + "..."
+                print(f"      Evidence: {evidence}")
         else:
             print("\n✅ No vulnerabilities found.")
         

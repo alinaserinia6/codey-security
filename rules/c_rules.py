@@ -22,7 +22,7 @@ C_RULES = [
         "sanitizers": ["check_overflow"]
     },
     {
-        "cve": "CVE-2020-12346",  # Example
+        "cve": "CVE-2020-12346",
         "cwe": "CWE-78",
         "name": "Command Injection",
         "description": "Using system() with user input allows command injection.",
@@ -30,6 +30,66 @@ C_RULES = [
         "severity": "CRITICAL",
         "sink": "system",
         "sanitizers": ["execve", "execvp"]
+    },
+    {
+        "cve": "CVE-2022-0847",
+        "cwe": "CWE-134",
+        "name": "Format String Vulnerability",
+        "description": "Passing user input as the format string to printf-family functions allows memory reads/writes.",
+        "patterns": ["printf(", "fprintf(", "sprintf(", "snprintf("],
+        "severity": "HIGH",
+        "sink": "printf",
+        "sanitizers": ["printf(\"%s\"", "fprintf(stderr,", "format = \""]
+    },
+    {
+        "cve": "CVE-2019-1543",
+        "cwe": "CWE-327",
+        "name": "Weak Cryptographic Algorithm",
+        "description": "MD5 and SHA1 are cryptographically broken for security-sensitive uses.",
+        "patterns": ["MD5(", "SHA1(", "MD5_Init(", "SHA1_Init("],
+        "severity": "MEDIUM",
+        "sink": "MD5",
+        "sanitizers": ["SHA256", "SHA384", "SHA512"]
+    },
+    {
+        "cve": "CVE-2021-3449",
+        "cwe": "CWE-295",
+        "name": "Disabled TLS Certificate Validation",
+        "description": "SSL_VERIFY_NONE disables certificate validation, enabling MITM attacks.",
+        "patterns": ["SSL_VERIFY_NONE", "verify = 0"],
+        "severity": "HIGH",
+        "sink": "SSL_VERIFY_NONE",
+        "sanitizers": ["SSL_VERIFY_PEER", "verify = 1"]
+    },
+    {
+        "cve": "CVE-2021-4034",
+        "cwe": "CWE-269",
+        "name": "Privilege Boundary Violation",
+        "description": "Calling setuid(0) without proper authorization checks is dangerous.",
+        "patterns": ["setuid(0)", "seteuid(0)", "setgid(0)"],
+        "severity": "HIGH",
+        "sink": "setuid",
+        "sanitizers": ["getuid", "check_priv"]
+    },
+    {
+        "cve": "CVE-2022-0185",
+        "cwe": "CWE-787",
+        "name": "Out-of-Bounds Write",
+        "description": "memcpy/memmove with unchecked sizes can write out of bounds.",
+        "patterns": ["memcpy(", "memmove("],
+        "severity": "HIGH",
+        "sink": "memcpy",
+        "sanitizers": ["memcpy_s", "memmove_s", "size check"]
+    },
+    {
+        "cve": "CVE-2021-3493",
+        "cwe": "CWE-416",
+        "name": "Use-After-Free Risk",
+        "description": "Freeing memory and then using the pointer can lead to code execution.",
+        "patterns": ["free(", "delete "],
+        "severity": "MEDIUM",
+        "sink": "free",
+        "sanitizers": ["NULL", "= NULL", "set to NULL"]
     }
 ]
 

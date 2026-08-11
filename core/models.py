@@ -1,8 +1,8 @@
 from pydantic import BaseModel
 from typing import List, Optional
-from enum import Enum
+from enum import StrEnum
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     CRITICAL = "CRITICAL"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"

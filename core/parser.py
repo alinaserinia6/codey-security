@@ -1,7 +1,6 @@
 import tree_sitter_python as tspython
 import tree_sitter_c as tsc
-from tree_sitter import Language, Parser
-from pathlib import Path
+from tree_sitter import Language, Parser, Query, QueryCursor
 from typing import List, Dict, Any
 
 class CodeParser:
@@ -60,15 +59,13 @@ class CodeParser:
         
         try:
             lang = self.parsers[language].language
-            query = lang.query(query_str)
-            captures = query.captures(node)
-            
-            for capture in captures:
-                if capture[1] == "function.name":
-                    func_node = capture[0]
-                    # Get function body
-                    parent = func_node.parent
-                    if parent and parent.type in ["function_definition", "function_declaration"]:
+            query = Query(lang, query_str)
+            cursor = QueryCursor(query)
+            captures = cursor.captures(node)
+
+            for name, nodes in captures.items():
+                if name == "function.name":
+                    for func_node in nodes:
                         functions.append({
                             "name": func_node.text.decode("utf-8"),
                             "start_line": func_node.start_point[0] + 1,
@@ -76,7 +73,7 @@ class CodeParser:
                         })
         except Exception as e:
             print(f"Error extracting functions: {e}")
-        
+
         return functions
     
     def _extract_calls(self, node, language: str) -> List[str]:
@@ -89,12 +86,14 @@ class CodeParser:
         
         try:
             lang = self.parsers[language].language
-            query = lang.query(query_str)
-            captures = query.captures(node)
-            
-            for capture in captures:
-                if capture[1] == "call":
-                    calls.append(capture[0].text.decode("utf-8"))
+            query = Query(lang, query_str)
+            cursor = QueryCursor(query)
+            captures = cursor.captures(node)
+
+            for name, nodes in captures.items():
+                if name == "call":
+                    for node in nodes:
+                        calls.append(node.text.decode("utf-8"))
         except Exception:
             pass
         
@@ -110,15 +109,17 @@ class CodeParser:
         
         try:
             lang = self.parsers[language].language
-            query = lang.query(query_str)
-            captures = query.captures(node)
-            
-            for capture in captures:
-                if capture[1] == "import":
-                    imports.append(capture[0].text.decode("utf-8"))
+            query = Query(lang, query_str)
+            cursor = QueryCursor(query)
+            captures = cursor.captures(node)
+
+            for name, nodes in captures.items():
+                if name == "import":
+                    for node in nodes:
+                        imports.append(node.text.decode("utf-8"))
         except Exception:
             pass
-        
+
         return imports
     
     def _extract_python_sensitive_calls(self, node) -> List[Dict]:
@@ -190,9 +191,6 @@ class CodeParser:
             """,
             "c": """
                 (function_definition
-                    declarator: (function_declarator
-                        declarator: (identifier) @function.name))
-                (function_declaration
                     declarator: (function_declarator
                         declarator: (identifier) @function.name))
             """

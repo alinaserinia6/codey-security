@@ -2,7 +2,6 @@ from typing import List, Dict, Any
 from core.models import Vulnerability, Severity
 from rules.python_rules import get_python_rules
 from rules.c_rules import get_c_rules
-import re
 
 class ScannerAgent:
     """
@@ -77,24 +76,57 @@ class ScannerAgent:
         return evidence
     
     def _enrich_with_llm(self, vulnerabilities: List[Vulnerability], code: str) -> List[Vulnerability]:
-        """Use LLM to enrich vulnerability findings with context."""
+        """Use LLM to enrich vulnerability findings with context and remediation hints."""
         if not self.llm_client:
             return vulnerabilities
-        
+
         try:
-            # Prepare context for LLM
-            context = f"Analyze this code for vulnerabilities:\n\n```\n{code[:2000]}\n```\n\n"
-            context += "Current findings:\n"
-            for v in vulnerabilities:
-                context += f"- {v.cve}: {v.name} at {v.location}\n"
-            
-            context += "\nProvide a brief analysis of each finding."
-            
-            # Call LLM (simplified - in production use proper LangChain)
-            # response = self.llm_client.invoke(context)
-            # ... enrich vulnerabilities with LLM response
-            
+            code_excerpt = code[:2000] if len(code) > 2000 else code
+            for vuln in vulnerabilities:
+                prompt = (
+                    "You are a senior application security engineer.\n"
+                    f"Code under review (excerpt):\n```\n{code_excerpt}\n```\n\n"
+                    f"Flagged issue: {vuln.name} ({vuln.cve}, {vuln.cwe})\n"
+                    f"Location: {vuln.location}\n"
+                    f"Current evidence: {vuln.evidence}\n\n"
+                    "Reply in exactly this format with no extra text:\n"
+                    "SEVERITY: <CRITICAL|HIGH|MEDIUM|LOW>\n"
+                    "ANALYSIS: <one sentence confirming/refuting the finding>\n"
+                    "FIX: <one sentence remediation>"
+                )
+
+                try:
+                    if hasattr(self.llm_client, "invoke"):
+                        response = self.llm_client.invoke(prompt)
+                        content = response.content.strip()
+                    else:
+                        content = str(self.llm_client(prompt)).strip()
+
+                    severity_line = next(
+                        (l for l in content.splitlines() if l.upper().startswith("SEVERITY:")), ""
+                    )
+                    analysis_line = next(
+                        (l for l in content.splitlines() if l.upper().startswith("ANALYSIS:")), ""
+                    )
+                    fix_line = next(
+                        (l for l in content.splitlines() if l.upper().startswith("FIX:")), ""
+                    )
+
+                    sev_value = severity_line.split(":", 1)[1].strip().upper()
+                    if sev_value in {s.value for s in Severity}:
+                        vuln.severity = Severity(sev_value)
+
+                    analysis_text = analysis_line.split(":", 1)[1].strip() if analysis_line else ""
+                    fix_text = fix_line.split(":", 1)[1].strip() if fix_line else ""
+                    if analysis_text or fix_text:
+                        llm_note = f"\n🤖 LLM: {analysis_text}"
+                        if fix_text:
+                            llm_note += f" | Fix: {fix_text}"
+                        vuln.evidence += llm_note
+                except Exception as inner:
+                    print(f"LLM enrichment failed for {vuln.cve}: {inner}")
+
         except Exception as e:
             print(f"LLM enrichment failed: {e}")
-        
+
         return vulnerabilities
