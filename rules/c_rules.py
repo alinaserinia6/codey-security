@@ -9,6 +9,7 @@ C_RULES = [
         "patterns": ["strcpy", "strcat", "sprintf", "gets"],
         "severity": "CRITICAL",
         "sink": "strcpy",
+        "ignore_if": ["strcpy_s", "strcat_s", "sprintf_s", "gets_s", "strncpy(", "snprintf(", "strlcpy("],
         "sanitizers": ["strncpy", "snprintf", "strlcpy"]
     },
     {
@@ -16,13 +17,13 @@ C_RULES = [
         "cwe": "CWE-190",
         "name": "Integer Overflow",
         "description": "Integer overflow in range processing can lead to information disclosure.",
-        "patterns": ["range", "content_range"],
+        "patterns": ["start + length"],
         "severity": "HIGH",
-        "sink": "range",
+        "sink": "start + length",
         "sanitizers": ["check_overflow"]
     },
     {
-        "cve": "CVE-2020-12346",
+        "cve": "N/A",
         "cwe": "CWE-78",
         "name": "Command Injection",
         "description": "Using system() with user input allows command injection.",
@@ -39,7 +40,8 @@ C_RULES = [
         "patterns": ["printf(", "fprintf(", "sprintf(", "snprintf("],
         "severity": "HIGH",
         "sink": "printf",
-        "sanitizers": ["printf(\"%s\"", "fprintf(stderr,", "format = \""]
+        "format_args": {"printf": 0, "fprintf": 1, "sprintf": 1, "snprintf": 2},
+        "sanitizers": ["fprintf(stderr,", "fprintf(stdout,"]
     },
     {
         "cve": "CVE-2019-1543",

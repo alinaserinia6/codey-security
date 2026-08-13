@@ -6,6 +6,7 @@ Unit tests for the vulnerability scanner.
 import unittest
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from core.parser import CodeParser
 from core.scanner_agent import ScannerAgent
@@ -103,7 +104,73 @@ def render():
         # Should be confirmed because user input reaches the sink
         self.assertTrue(results[0].confirmed)
 
+    def test_reject_when_no_source(self):
+        """A sink with no reachable user input must not be confirmed."""
+        from core.models import Vulnerability, Severity
+
+        vuln = Vulnerability(
+            cve="CVE-2021-3156",
+            cwe="CWE-787",
+            name="Heap Buffer Overflow",
+            description="Buffer overflow",
+            location="test.c:3",
+            severity=Severity.CRITICAL,
+            evidence="Found strcpy",
+            confirmed=False
+        )
+
+        # strcpy copies a constant string; no tainted parameter or call.
+        code = """
+#include <string.h>
+void copy(char *input) {
+    char buffer[64];
+    strcpy(buffer, "static");
+}
+int main(void) {
+    copy("static");
+    return 0;
+}
+"""
+        parsed = {"file": "test.c"}
+        results = self.verifier.verify([vuln], code, parsed)
+        # Enclosing function has no tainted source and its call passes literals.
+        self.assertFalse(results[0].confirmed)
+
+    def test_confirm_via_tainted_call_argument(self):
+        """C parameter taint: function called with argv reaches a sink."""
+        from core.models import Vulnerability, Severity
+        from core.parser import CodeParser
+
+        code = """
+#include <string.h>
+void copy(char *input) {
+    char buffer[64];
+    strcpy(buffer, input);
+}
+int main(int argc, char **argv) {
+    copy(argv[1]);
+    return 0;
+}
+"""
+        parser = CodeParser()
+        parsed = parser.parse(code, "c")
+        parsed["file"] = "test.c"
+
+        vuln = Vulnerability(
+            cve="CVE-2021-3156",
+            cwe="CWE-787",
+            name="Heap Buffer Overflow",
+            description="Buffer overflow",
+            location="test.c:4",
+            severity=Severity.CRITICAL,
+            evidence="Found strcpy",
+            confirmed=False
+        )
+        results = self.verifier.verify([vuln], code, parsed)
+        self.assertTrue(results[0].confirmed)
+
 class TestIntegration(unittest.TestCase):
+    @patch("config.Config.AI_API_KEY", "")
     def setUp(self):
         self.scanner = VulnerabilityScanner()
     

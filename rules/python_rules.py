@@ -22,7 +22,7 @@ PYTHON_RULES = [
         "sanitizers": ["yaml.safe_load"]
     },
     {
-        "cve": "CVE-2020-12345",
+        "cve": "N/A",
         "cwe": "CWE-95",
         "name": "Dynamic Code Execution",
         "description": "Using eval() or exec() with user-controlled input allows arbitrary code execution.",
@@ -42,7 +42,7 @@ PYTHON_RULES = [
         "sanitizers": ["parameterized", "?", "execute(sql, params)"]
     },
     {
-        "cve": "CVE-2021-3177",
+        "cve": "N/A",
         "cwe": "CWE-78",
         "name": "Command Injection",
         "description": "Using os.system or subprocess with shell=True and user input allows command injection.",
@@ -52,7 +52,7 @@ PYTHON_RULES = [
         "sanitizers": ["shell=False", "shlex.quote", "shlex.split"]
     },
     {
-        "cve": "CVE-2021-3733",
+        "cve": "N/A",
         "cwe": "CWE-22",
         "name": "Path Traversal",
         "description": "Joining user-controlled input with file paths allows directory traversal.",

@@ -1,15 +1,25 @@
 import tree_sitter_python as tspython
 import tree_sitter_c as tsc
 from tree_sitter import Language, Parser, Query, QueryCursor
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 class CodeParser:
-    """Parses source code using Tree-sitter and extracts functions, calls, and sensitive patterns."""
-    
+    """Parses source code using Tree-sitter and extracts functions, calls, and non-code line ranges."""
+
+    # Node types that should never count as a code match for a vulnerability pattern.
+    _NON_CODE_TYPES = {
+        "comment",
+        "string",
+        "string_literal",
+        "import_statement",
+        "import_from_statement",
+        "preproc_include",
+    }
+
     def __init__(self):
         self.parsers = {}
         self._init_parsers()
-    
+
     def _init_parsers(self):
         """Initialize Tree-sitter parsers for supported languages."""
         try:
@@ -17,57 +27,60 @@ class CodeParser:
             py_lang = Language(tspython.language())
             py_parser = Parser(py_lang)
             self.parsers["python"] = py_parser
-            
+
             # C parser
             c_lang = Language(tsc.language())
             c_parser = Parser(c_lang)
             self.parsers["c"] = c_parser
         except Exception as e:
             print(f"Warning: Could not initialize Tree-sitter: {e}")
-    
+
     def parse(self, code: str, language: str) -> Dict[str, Any]:
         """Parse source code and extract relevant information."""
         if language not in self.parsers:
             return {"error": f"Language {language} not supported"}
-        
+
         parser = self.parsers[language]
         tree = parser.parse(bytes(code, "utf-8"))
         root = tree.root_node
-        
+
         result = {
             "functions": self._extract_functions(root, language),
-            "calls": self._extract_calls(root, language),
-            "sensitive_calls": [],
-            "imports": self._extract_imports(root, language)
+            "call_sites": self._extract_call_sites(root, language),
+            "imports": self._extract_imports(root, language),
+            "non_code_ranges": self._extract_non_code_ranges(code, root),
         }
-        
-        # Extract sensitive function calls based on language
-        if language == "python":
-            result["sensitive_calls"] = self._extract_python_sensitive_calls(root)
-        elif language == "c":
-            result["sensitive_calls"] = self._extract_c_sensitive_calls(root)
-        
+
         return result
-    
+
+    @staticmethod
+    def _walk(node):
+        """Yield `node` and all of its descendants."""
+        yield node
+        for child in node.children:
+            yield from CodeParser._walk(child)
+
     def _extract_functions(self, node, language: str) -> List[Dict]:
-        """Extract function definitions."""
+        """Extract function definitions with their full line span."""
         functions = []
         query_str = self._get_function_query(language)
-        
+
         if not query_str:
             return functions
-        
+
         try:
-            lang = self.parsers[language].language
-            query = Query(lang, query_str)
+            query = Query(self.parsers[language].language, query_str)
             cursor = QueryCursor(query)
             captures = cursor.captures(node)
 
             for name, nodes in captures.items():
-                if name == "function.name":
+                if name == "function":
                     for func_node in nodes:
+                        func_name = self._function_name(func_node, language)
+                        if not func_name:
+                            continue
                         functions.append({
-                            "name": func_node.text.decode("utf-8"),
+                            "name": func_name,
                             "start_line": func_node.start_point[0] + 1,
                             "end_line": func_node.end_point[0] + 1
                         })
@@ -75,41 +88,107 @@ class CodeParser:
             print(f"Error extracting functions: {e}")
 
         return functions
-    
-    def _extract_calls(self, node, language: str) -> List[str]:
-        """Extract function calls."""
-        calls = []
-        query_str = self._get_call_query(language)
-        
-        if not query_str:
-            return calls
-        
-        try:
-            lang = self.parsers[language].language
-            query = Query(lang, query_str)
-            cursor = QueryCursor(query)
-            captures = cursor.captures(node)
 
-            for name, nodes in captures.items():
-                if name == "call":
-                    for node in nodes:
-                        calls.append(node.text.decode("utf-8"))
-        except Exception:
-            pass
-        
-        return calls
-    
+    @staticmethod
+    def _function_name(func_node, language: str):
+        """Extract the function name from a function_definition node."""
+        name_field = func_node.child_by_field_name("name")
+        if name_field is not None:
+            return name_field.text.decode("utf-8")
+        # C: name lives under declarator -> declarator
+        declarator = func_node.child_by_field_name("declarator")
+        if declarator is not None:
+            name_field = declarator.child_by_field_name("declarator")
+            if name_field is not None:
+                return name_field.text.decode("utf-8")
+        return None
+
+    def _extract_call_sites(self, node, language: str) -> List[Dict]:
+        """Extract function call sites with their text and start line.
+
+        A direct AST walker is used instead of a tree-sitter `(call)` query because
+        query captures can yield duplicate/unreliable matches.
+        """
+        call_sites = []
+        target_type = "call" if language == "python" else "call_expression"
+        seen = set()
+
+        for call_node in self._walk(node):
+            if call_node.type != target_type:
+                continue
+            key = (call_node.start_byte, call_node.end_byte)
+            if key in seen:
+                continue
+            seen.add(key)
+            call_sites.append({
+                "text": call_node.text.decode("utf-8"),
+                "line": call_node.start_point[0] + 1,
+                "start_col": call_node.start_point[1],
+                "end_col": call_node.end_point[1],
+                "args": self._call_args(call_node),
+            })
+
+        return call_sites
+
+    @staticmethod
+    def _call_args(call_node) -> List[str]:
+        """Extract the source text of each argument of a call node."""
+        arg_list = next(
+            (c for c in call_node.children if c.type == "argument_list"),
+            None,
+        )
+        if arg_list is None:
+            return []
+        return [
+            c.text.decode("utf-8")
+            for c in arg_list.children
+            if c.type not in ("(", ")", ",")
+        ]
+
+    def _extract_non_code_ranges(self, code: str, node) -> Dict[int, List[Tuple[int, int]]]:
+        """Return 1-indexed line number -> list of 0-indexed column ranges that are
+        comments, string literals, or import/include statements.
+
+        Column ranges (rather than whole lines) are used so that a vulnerability
+        pattern on a line like `x = subprocess.call(cmd)  # eval` is still detected
+        even though trailing comments are stripped.
+        """
+        lines = code.splitlines()
+        ranges: Dict[int, List[Tuple[int, int]]] = {}
+
+        def add(line, start_col, end_col):
+            if end_col <= start_col:
+                return
+            ranges.setdefault(line, []).append((start_col, end_col))
+
+        for child in self._walk(node):
+            if child.type not in self._NON_CODE_TYPES:
+                continue
+            start_line = child.start_point[0] + 1
+            end_line = child.end_point[0] + 1
+            start_col = child.start_point[1]
+            end_col = child.end_point[1]
+
+            if start_line == end_line:
+                add(start_line, start_col, end_col)
+            else:
+                add(start_line, start_col, len(lines[start_line - 1]))
+                for ln in range(start_line + 1, end_line):
+                    add(ln, 0, len(lines[ln - 1]))
+                add(end_line, 0, end_col)
+
+        return ranges
+
     def _extract_imports(self, node, language: str) -> List[str]:
         """Extract import statements."""
         imports = []
         query_str = self._get_import_query(language)
-        
+
         if not query_str:
             return imports
-        
+
         try:
-            lang = self.parsers[language].language
-            query = Query(lang, query_str)
+            query = Query(self.parsers[language].language, query_str)
             cursor = QueryCursor(query)
             captures = cursor.captures(node)
 
@@ -121,89 +200,21 @@ class CodeParser:
             pass
 
         return imports
-    
-    def _extract_python_sensitive_calls(self, node) -> List[Dict]:
-        """Extract sensitive Python function calls (eval, exec, etc.)."""
-        sensitive = []
-        patterns = [
-            ("eval", "CWE-95", "Dynamic code evaluation"),
-            ("exec", "CWE-95", "Dynamic code execution"),
-            ("render_template_string", "CWE-94", "Template injection"),
-            ("yaml.load", "CWE-502", "Unsafe deserialization"),
-            ("yaml.unsafe_load", "CWE-502", "Unsafe deserialization"),
-            ("pickle.loads", "CWE-502", "Unsafe deserialization"),
-        ]
-        
-        # Simple text-based search for sensitive calls (in production, use AST traversal)
-        code = node.text.decode("utf-8") if hasattr(node, "text") else ""
-        for pattern, cwe, desc in patterns:
-            if pattern in code:
-                sensitive.append({
-                    "pattern": pattern,
-                    "cwe": cwe,
-                    "description": desc,
-                    "line": self._find_line(code, pattern)
-                })
-        
-        return sensitive
-    
-    def _extract_c_sensitive_calls(self, node) -> List[Dict]:
-        """Extract sensitive C function calls."""
-        sensitive = []
-        patterns = [
-            ("strcpy", "CWE-119", "Buffer overflow risk"),
-            ("strcat", "CWE-119", "Buffer overflow risk"),
-            ("sprintf", "CWE-119", "Buffer overflow risk"),
-            ("gets", "CWE-119", "Buffer overflow risk"),
-            ("scanf", "CWE-119", "Buffer overflow risk"),
-            ("system", "CWE-78", "Command injection"),
-        ]
-        
-        code = node.text.decode("utf-8") if hasattr(node, "text") else ""
-        for pattern, cwe, desc in patterns:
-            if pattern in code:
-                sensitive.append({
-                    "pattern": pattern,
-                    "cwe": cwe,
-                    "description": desc,
-                    "line": self._find_line(code, pattern)
-                })
-        
-        return sensitive
-    
-    def _find_line(self, code: str, pattern: str) -> int:
-        """Find line number of a pattern in code."""
-        lines = code.split("\n")
-        for i, line in enumerate(lines):
-            if pattern in line:
-                return i + 1
-        return 0
-    
+
     def _get_function_query(self, language: str) -> str:
         queries = {
             "python": """
-                (function_definition
-                    name: (identifier) @function.name)
+                (function_definition) @function
                 (class_definition
                     body: (block
-                        (function_definition
-                            name: (identifier) @function.name)))
+                        (function_definition) @function))
             """,
             "c": """
-                (function_definition
-                    declarator: (function_declarator
-                        declarator: (identifier) @function.name))
+                (function_definition) @function
             """
         }
         return queries.get(language, "")
-    
-    def _get_call_query(self, language: str) -> str:
-        queries = {
-            "python": "(call function: (identifier) @call)",
-            "c": "(call_expression function: (identifier) @call)"
-        }
-        return queries.get(language, "")
-    
+
     def _get_import_query(self, language: str) -> str:
         queries = {
             "python": """
