@@ -1,11 +1,11 @@
 import os
 from dotenv import load_dotenv
-from pydantic import SecretStr
+# from datasets import load_from_disk
 
 load_dotenv()
 
 class Config:
-    AI_API_KEY = SecretStr(os.getenv("AI_API_KEY", ""))
+    AI_API_KEY = os.getenv("AI_API_KEY")
     AI_BASE_URL = os.getenv("AI_BASE_URL", "https://api.freetheai.xyz/v1")
     AI_MODEL = os.getenv("AI_MODEL", "min/minimax-m3")
     

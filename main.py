@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import List, Dict
 
 from langchain_openai import ChatOpenAI
+from pydantic import SecretStr
 
 from core.parser import CodeParser
 from core.scanner_agent import ScannerAgent
@@ -29,7 +30,7 @@ class VulnerabilityScanner:
             try:
                 llm = ChatOpenAI(
                     model=Config.AI_MODEL,
-                    api_key=Config.AI_API_KEY,
+                    api_key=SecretStr(Config.AI_API_KEY),
                     base_url=Config.AI_BASE_URL,
                     temperature=0,
                     max_completion_tokens=1000,

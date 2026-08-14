@@ -44,6 +44,9 @@ class CodeParser:
         tree = parser.parse(bytes(code, "utf-8"))
         root = tree.root_node
 
+        print(root)
+        exit(0)
+
         result = {
             "functions": self._extract_functions(root, language),
             "call_sites": self._extract_call_sites(root, language),
