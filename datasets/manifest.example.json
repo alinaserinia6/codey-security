@@ -1,0 +1,21 @@
+{
+  "samples": [
+    {
+      "sample_id": "cpp_cwe120_001",
+      "file": "../examples/cpp/vulnerable.cpp",
+      "vulnerable": true,
+      "cwe": ["CWE-120"],
+      "line": 5,
+      "function": "vulnerable_copy",
+      "finding_id": "strcpy",
+      "description": "Unbounded copy into a fixed-size stack buffer"
+    },
+    {
+      "sample_id": "cpp_safe_001",
+      "file": "../examples/cpp/vulnerable.cpp",
+      "vulnerable": false,
+      "cwe": [],
+      "description": "Placeholder negative sample; replace with an actually benign file"
+    }
+  ]
+}

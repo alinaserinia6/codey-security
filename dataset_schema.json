@@ -1,0 +1,22 @@
+{
+  "description": "Phase 3 ground-truth manifest schema",
+  "samples": [
+    {
+      "sample_id": "cwe120_001",
+      "file": "samples/cwe120_001.c",
+      "vulnerable": true,
+      "cwe": ["CWE-120"],
+      "line": 8,
+      "function": "copy_input",
+      "finding_id": "GT-001",
+      "description": "Unbounded copy into fixed-size stack buffer"
+    },
+    {
+      "sample_id": "safe_001",
+      "file": "samples/safe_001.c",
+      "vulnerable": false,
+      "cwe": [],
+      "description": "Benign sample with no target vulnerability"
+    }
+  ]
+}

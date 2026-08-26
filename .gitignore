@@ -1,2 +1,15 @@
-**/__pycache__/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 .env
+.DS_Store
+results/*.json
+results/*.csv
+results/*.html
+*.log
