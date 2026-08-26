@@ -4,7 +4,6 @@ PYTHON ?= python3
 
 install:
 	$(PYTHON) -m pip install -r requirements.txt
-	$(PYTHON) -m pip install -r requirements-dev.txt
 
 test:
 	pytest -q

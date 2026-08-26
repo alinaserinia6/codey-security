@@ -1,5 +1,0 @@
-# Ubuntu/Debian runtime tools (install with apt, not pip)
-# cppcheck
-# flawfinder
-# clang
-# clang-tools (scan-build)

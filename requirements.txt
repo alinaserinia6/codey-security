@@ -3,3 +3,5 @@ tree-sitter-python>=0.25,<0.26
 tree-sitter-c>=0.24,<0.25
 tree-sitter-cpp>=0.23,<0.24
 bandit>=1.8,<2
+
+pytest>=8,<9
