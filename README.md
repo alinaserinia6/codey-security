@@ -14,30 +14,69 @@ The project targets **Python and C/C++ source code** and is designed as a reprod
 
 ## Table of Contents
 
-- [Research Problem](#research-problem)
-- [Research Question](#research-question)
-- [Objectives](#objectives)
-- [System Overview](#system-overview)
-- [Architecture](#architecture)
-- [Phase 1 — Deterministic Program Analysis](#phase-1--deterministic-program-analysis)
-- [Phase 2 — Multi-Agent Vulnerability Verification](#phase-2--multi-agent-vulnerability-verification)
-- [Phase 3 — Benchmarking and Evaluation](#phase-3--benchmarking-and-evaluation)
-- [Finding Representation](#finding-representation)
-- [Datasets](#datasets)
-- [Experimental Design](#experimental-design)
-- [Evaluation Metrics](#evaluation-metrics)
-- [Target Vulnerability Classes](#target-vulnerability-classes)
-- [Technology Stack](#technology-stack)
-- [Repository Structure](#repository-structure)
-- [Installation](#installation)
-- [Usage](#usage)
-- [Juliet Benchmark](#juliet-benchmark)
-- [Research Reproducibility](#research-reproducibility)
-- [Current Status](#current-status)
-- [Limitations](#limitations)
-- [Roadmap](#roadmap)
-- [Research Contribution](#research-contribution)
-- [References](#references)
+- [Codey-Security](#codey-security)
+  - [Structural and Multi-Agent Code Vulnerability Assessment with False-Positive Reduction](#structural-and-multi-agent-code-vulnerability-assessment-with-false-positive-reduction)
+  - [Table of Contents](#table-of-contents)
+  - [Research Problem](#research-problem)
+  - [Research Question](#research-question)
+  - [Objectives](#objectives)
+  - [System Overview](#system-overview)
+  - [Architecture](#architecture)
+    - [Layer 1 — Structural Analysis](#layer-1--structural-analysis)
+    - [Layer 2 — Static Analysis](#layer-2--static-analysis)
+    - [Layer 3 — Finding Correlation](#layer-3--finding-correlation)
+    - [Layer 4 — Multi-Agent Reasoning](#layer-4--multi-agent-reasoning)
+    - [Layer 5 — Evaluation](#layer-5--evaluation)
+  - [Phase 1 — Deterministic Program Analysis](#phase-1--deterministic-program-analysis)
+    - [Structural analysis](#structural-analysis)
+    - [Static-analysis adapters](#static-analysis-adapters)
+    - [Phase 1 design goal](#phase-1-design-goal)
+  - [Phase 2 — Multi-Agent Vulnerability Verification](#phase-2--multi-agent-vulnerability-verification)
+  - [Security Evidence Agent](#security-evidence-agent)
+  - [Program Context Agent](#program-context-agent)
+  - [Adversarial Critic](#adversarial-critic)
+  - [Final Adjudicator](#final-adjudicator)
+    - [Agent output](#agent-output)
+  - [Phase 3 — Benchmarking and Evaluation](#phase-3--benchmarking-and-evaluation)
+  - [Finding Representation](#finding-representation)
+  - [Datasets](#datasets)
+    - [Primary benchmark — Juliet C/C++ 1.3](#primary-benchmark--juliet-cc-13)
+    - [Other datasets / case studies](#other-datasets--case-studies)
+  - [Experimental Design](#experimental-design)
+    - [Baseline A — Static Analysis Only](#baseline-a--static-analysis-only)
+    - [Baseline B — LLM Only](#baseline-b--llm-only)
+    - [Experiment C — Static Analysis + LLM](#experiment-c--static-analysis--llm)
+    - [Experiment D — Structural Analysis + Static Analysis + Multi-Agent Verification](#experiment-d--structural-analysis--static-analysis--multi-agent-verification)
+  - [Ablation Studies](#ablation-studies)
+  - [Evaluation Metrics](#evaluation-metrics)
+    - [Precision](#precision)
+    - [Recall](#recall)
+    - [F1 Score](#f1-score)
+    - [False Positive Rate](#false-positive-rate)
+    - [Specificity](#specificity)
+    - [Accuracy](#accuracy)
+    - [Per-CWE Metrics](#per-cwe-metrics)
+  - [Target Vulnerability Classes](#target-vulnerability-classes)
+  - [Technology Stack](#technology-stack)
+  - [Repository Structure](#repository-structure)
+  - [Installation](#installation)
+    - [Python environment](#python-environment)
+    - [System tools](#system-tools)
+  - [Usage](#usage)
+    - [Phase 1 — Analyze one file](#phase-1--analyze-one-file)
+  - [Phase 2 — Multi-agent verification](#phase-2--multi-agent-verification)
+  - [Phase 3 — Evaluation](#phase-3--evaluation)
+  - [Juliet Benchmark](#juliet-benchmark)
+  - [Research Reproducibility](#research-reproducibility)
+  - [Current Status](#current-status)
+  - [Implemented / research core](#implemented--research-core)
+  - [In progress](#in-progress)
+  - [Not the primary research target](#not-the-primary-research-target)
+  - [Limitations](#limitations)
+  - [Roadmap](#roadmap)
+  - [Research Contribution](#research-contribution)
+  - [References](#references)
+  - [License](#license)
 
 ---
 
@@ -80,7 +119,7 @@ The project has five primary objectives:
 
 ---
 
-# System Overview
+## System Overview
 
 The complete system is organized into three research phases:
 
@@ -90,8 +129,8 @@ The complete system is organized into three research phases:
                               ▼
                 ┌──────────────────────────┐
                 │ Phase 1                  │
-                │ Structural + Static     │
-                │ Program Analysis        │
+                │ Structural + Static      │
+                │ Program Analysis         │
                 │                          │
                 │ Tree-sitter              │
                 │ Bandit                   │
@@ -138,9 +177,9 @@ The important design principle is that **Phase 1 provides deterministic evidence
 
 ---
 
-# Architecture
+## Architecture
 
-## Layer 1 — Structural Analysis
+### Layer 1 — Structural Analysis
 
 Tree-sitter is used to construct language-aware syntax information and extract structural features such as:
 
@@ -155,12 +194,12 @@ Tree-sitter is used to construct language-aware syntax information and extract s
 
 The structural representation gives later components more context than raw source text alone.
 
-## Layer 2 — Static Analysis
+### Layer 2 — Static Analysis
 
 Multiple deterministic tools can provide candidate findings:
 
 | Language | Tool | Role |
-|---|---|---|
+| --- | --- | --- |
 | Python | Bandit | Python security baseline |
 | C/C++ | Flawfinder | Dangerous-function and security-pattern baseline |
 | C/C++ | Cppcheck | Static-analysis and defect/security findings |
@@ -168,7 +207,7 @@ Multiple deterministic tools can provide candidate findings:
 
 The adapters normalize different scanner outputs into a common finding representation.
 
-## Layer 3 — Finding Correlation
+### Layer 3 — Finding Correlation
 
 Different tools can report the same underlying vulnerability. The correlation layer therefore groups related findings using attributes such as:
 
@@ -181,17 +220,17 @@ Different tools can report the same underlying vulnerability. The correlation la
 
 This prevents the evaluation from incorrectly counting the same vulnerability multiple times.
 
-## Layer 4 — Multi-Agent Reasoning
+### Layer 4 — Multi-Agent Reasoning
 
 The normalized finding is passed to specialized agents. Each agent has a constrained responsibility rather than asking one LLM to perform the entire analysis.
 
-## Layer 5 — Evaluation
+### Layer 5 — Evaluation
 
 The resulting decisions are matched against ground truth and evaluated using standard classification metrics.
 
 ---
 
-# Phase 1 — Deterministic Program Analysis
+## Phase 1 — Deterministic Program Analysis
 
 Phase 1 creates the evidence that the multi-agent system will later reason about.
 
@@ -244,7 +283,7 @@ It should not make the final exploitability judgment.
 
 ---
 
-# Phase 2 — Multi-Agent Vulnerability Verification
+## Phase 2 — Multi-Agent Vulnerability Verification
 
 Phase 2 takes the deterministic findings and performs structured reasoning.
 
@@ -301,7 +340,7 @@ A finding should contain structured evidence rather than only natural-language r
 
 ---
 
-# Phase 3 — Benchmarking and Evaluation
+## Phase 3 — Benchmarking and Evaluation
 
 Phase 3 turns the scanner into a research experiment.
 
@@ -338,7 +377,7 @@ The evaluation layer is designed so different experimental configurations can be
 
 ---
 
-# Finding Representation
+## Finding Representation
 
 The project uses a normalized finding representation so all tools and agents can communicate through one schema.
 
@@ -365,9 +404,9 @@ After Phase 2, the finding additionally receives an adjudication result and supp
 
 ---
 
-# Datasets
+## Datasets
 
-## Primary benchmark — Juliet C/C++ 1.3
+### Primary benchmark — Juliet C/C++ 1.3
 
 Juliet is the primary benchmark for the C/C++ evaluation because it contains labeled vulnerable and non-vulnerable test cases organized by CWE.
 
@@ -383,7 +422,7 @@ The repository contains a Juliet ingestion layer that can:
 
 The benchmark should initially be run on a controlled subset such as one or a small number of CWEs before scaling to the complete dataset.
 
-## Other datasets / case studies
+### Other datasets / case studies
 
 The research plan can additionally use:
 
@@ -396,11 +435,11 @@ These datasets serve different purposes and should not automatically be mixed in
 
 ---
 
-# Experimental Design
+## Experimental Design
 
 The central experiment compares systems with progressively more information and reasoning.
 
-## Baseline A — Static Analysis Only
+### Baseline A — Static Analysis Only
 
 ```text
 Static analyzer
@@ -408,7 +447,7 @@ Static analyzer
 Final finding
 ```
 
-## Baseline B — LLM Only
+### Baseline B — LLM Only
 
 ```text
 Source code
@@ -418,7 +457,7 @@ LLM
 Finding
 ```
 
-## Experiment C — Static Analysis + LLM
+### Experiment C — Static Analysis + LLM
 
 ```text
 Static finding
@@ -430,7 +469,7 @@ LLM
 Decision
 ```
 
-## Experiment D — Structural Analysis + Static Analysis + Multi-Agent Verification
+### Experiment D — Structural Analysis + Static Analysis + Multi-Agent Verification
 
 ```text
 AST / structure
@@ -448,14 +487,14 @@ Experiment D is the main proposed system.
 
 ---
 
-# Ablation Studies
+## Ablation Studies
 
 To determine which components actually contribute to false-positive reduction, the project should run controlled ablations.
 
 Recommended configurations:
 
 | Configuration | Structural Analysis | Static Analysis | Multi-Agent Verification |
-|---|---:|---:|---:|
+| --- | --- | --- | --- |
 | SAST | No | Yes | No |
 | LLM | No | No | No |
 | SAST + LLM | No | Yes | Yes (single verifier) |
@@ -474,7 +513,7 @@ The purpose is to establish whether improvements come from:
 
 ---
 
-# Evaluation Metrics
+## Evaluation Metrics
 
 The primary metrics are:
 
@@ -528,7 +567,7 @@ Results should also be reported separately by CWE so that improvements are not h
 
 ---
 
-# Target Vulnerability Classes
+## Target Vulnerability Classes
 
 The project can evaluate vulnerability categories including:
 
@@ -545,7 +584,7 @@ The project can evaluate vulnerability categories including:
 The initial real-world case studies from the proposal include:
 
 | CVE | Project / Technology | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | CVE-2021-3156 | Sudo | Real-world C case study |
 | CVE-2017-7529 | Nginx | Real-world C case study |
 | CVE-2021-25239 | Jinja/Flask ecosystem | Python case study |
@@ -555,10 +594,10 @@ These CVEs should be treated as targeted case studies rather than as a substitut
 
 ---
 
-# Technology Stack
+## Technology Stack
 
 | Technology | Purpose |
-|---|---|
+| --- | --- |
 | Python | Main implementation language |
 | Tree-sitter | Parsing and structural analysis |
 | Bandit | Python static-analysis baseline |
@@ -573,7 +612,7 @@ These CVEs should be treated as targeted case studies rather than as a substitut
 
 ---
 
-# Repository Structure
+## Repository Structure
 
 The recommended consolidated research structure is:
 
@@ -641,18 +680,17 @@ The repository may contain additional application/UI files. The structure above 
 
 ---
 
-# Installation
+## Installation
 
-## Python environment
+### Python environment
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install -r requirements-dev.txt
 ```
 
-## System tools
+### System tools
 
 On Ubuntu/Debian, install the external C/C++ analyzers used by Phase 1:
 
@@ -673,30 +711,30 @@ The exact `scan-build` executable name can vary with the installed Clang package
 
 ---
 
-# Usage
+## Usage
 
-## Phase 1 — Analyze one file
+### Phase 1 — Analyze one file
 
 ```bash
-python run_pipeline.py samples/example.cpp --out results/example.phase1.json
+python3 run_pipeline.py samples/example.cpp --out results/example.phase1.json
 ```
 
 For Python:
 
 ```bash
-python run_pipeline.py samples/example.py --out results/example.phase1.json
+python3 run_pipeline.py samples/example.py --out results/example.phase1.json
 ```
 
 For a directory:
 
 ```bash
-python run_pipeline.py ./samples --out results/samples.phase1.json
+python3 run_pipeline.py ./samples --out results/samples.phase1.json
 ```
 
 ## Phase 2 — Multi-agent verification
 
 ```bash
-python run_phase2.py samples/example.cpp \
+python3 run_phase2.py samples/example.cpp \
     --provider ollama \
     --out results/example.phase2.json
 ```
@@ -706,7 +744,7 @@ For an API-based provider, configure the corresponding environment variables and
 ## Phase 3 — Evaluation
 
 ```bash
-python run_phase3.py datasets/manifest.json \
+python3 run_phase3.py datasets/manifest.json \
     --mode phase1 \
     --out results/phase1_eval.json
 ```
@@ -714,7 +752,7 @@ python run_phase3.py datasets/manifest.json \
 For the full Phase 1 + Phase 2 system:
 
 ```bash
-python run_phase3.py datasets/manifest.json \
+python3 run_phase3.py datasets/manifest.json \
     --mode phase2 \
     --provider ollama \
     --out results/phase2_eval.json
@@ -723,7 +761,7 @@ python run_phase3.py datasets/manifest.json \
 Compare experiments:
 
 ```bash
-python aggregate_phase3.py \
+python3 aggregate_phase3.py \
     results/phase1_eval.json \
     results/phase2_eval.json \
     --csv results/comparison.csv
@@ -731,7 +769,7 @@ python aggregate_phase3.py \
 
 ---
 
-# Juliet Benchmark
+## Juliet Benchmark
 
 The Juliet integration is intended to make the benchmark reproducible.
 
@@ -740,7 +778,7 @@ Obtain a local Juliet C/C++ 1.3 checkout and point the scripts to its root.
 Generate a controlled CWE subset:
 
 ```bash
-python scripts/generate_juliet_manifest.py \
+python3 scripts/generate_juliet_manifest.py \
     /path/to/juliet-test-suite-c \
     --cwe CWE-120 \
     --max-samples 100 \
@@ -750,7 +788,7 @@ python scripts/generate_juliet_manifest.py \
 Create a group-safe split:
 
 ```bash
-python scripts/split_juliet_manifest.py \
+python3 scripts/split_juliet_manifest.py \
     datasets/juliet_cwe120.json \
     --train-out datasets/juliet_train.json \
     --test-out datasets/juliet_test.json \
@@ -761,7 +799,7 @@ python scripts/split_juliet_manifest.py \
 Run the benchmark:
 
 ```bash
-python scripts/run_juliet_benchmark.py \
+python3 scripts/run_juliet_benchmark.py \
     datasets/juliet_test.json \
     --out results/juliet_phase1.json
 ```
@@ -770,7 +808,7 @@ Start with a small subset and verify the toolchain before scaling to the full be
 
 ---
 
-# Research Reproducibility
+## Research Reproducibility
 
 Every experiment should record:
 
@@ -805,7 +843,7 @@ This makes experiments auditable and repeatable.
 
 ---
 
-# Current Status
+## Current Status
 
 ## Implemented / research core
 
@@ -846,7 +884,7 @@ The following are intentionally secondary until the research evaluation is stabl
 
 ---
 
-# Limitations
+## Limitations
 
 The system has several important limitations that should be acknowledged in the final research report.
 
@@ -858,7 +896,7 @@ The system has several important limitations that should be acknowledged in the 
 
 ---
 
-# Roadmap
+## Roadmap
 
 ```text
 Phase 1  ─ Deterministic structural/static analysis       ✅
@@ -875,7 +913,7 @@ Next     ─ Research report / thesis evaluation           🚧
 
 ---
 
-# Research Contribution
+## Research Contribution
 
 The intended contribution is not simply another LLM-based vulnerability scanner.
 
@@ -907,17 +945,17 @@ A successful evaluation should demonstrate, for the selected benchmark and match
 
 ---
 
-# References
+## References
 
 1. Johnson, B., Song, Y., Murphy-Hill, E., and Bowdidge, R. *Why Don't Software Developers Use Static Analysis Tools to Find Bugs?* ICSE, 2013.
 2. Evans, D. and Larochelle, D. *Improving Security Using Extensible Lightweight Static Analysis.* IEEE Software, 2002.
 3. Zhou, Y., Liu, S., Siow, J., Du, X., and Liu, Y. *Devign: Effective Vulnerability Identification by Learning Comprehensive Program Semantics via Graph Neural Networks.* NeurIPS, 2019.
-4. Tree-sitter documentation: https://tree-sitter.github.io/tree-sitter/
-5. Bandit: https://github.com/PyCQA/bandit
-6. Cppcheck: https://github.com/danmar/cppcheck
-7. Flawfinder: https://github.com/david-a-wheeler/flawfinder
-8. Clang Static Analyzer: https://clang.llvm.org/docs/ClangStaticAnalyzer.html
-9. Juliet Test Suite / NIST SARD: https://samate.nist.gov/
+4. Tree-sitter documentation: <https://tree-sitter.github.io/tree-sitter/>
+5. Bandit: <https://github.com/PyCQA/bandit>
+6. Cppcheck: <https://github.com/danmar/cppcheck>
+7. Flawfinder: <https://github.com/david-a-wheeler/flawfinder>
+8. Clang Static Analyzer: <https://clang.llvm.org/docs/ClangStaticAnalyzer.html>
+9. Juliet Test Suite / NIST SARD: <https://samate.nist.gov/>
 
 ---
 
