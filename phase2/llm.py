@@ -9,7 +9,7 @@ class Phase2LLM:
     def __init__(self, provider: Optional[str] = None, temperature: float = 0.0, max_tokens: int = 1800):
         if provider is None:
             try:
-                from config.env_config import config
+                from env_config import config
                 provider = config.default_llm_provider
             except ImportError:
                 provider = "openai"
