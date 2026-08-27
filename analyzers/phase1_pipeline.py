@@ -3,11 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .finding import NormalizedReport, correlate_findings, deduplicate_findings
 from .static_tools import BanditRunner, ClangStaticAnalyzerRunner, CppcheckRunner, FlawfinderRunner
-from .structural_analyzer import C_EXTENSIONS, CPP_EXTENSIONS, PYTHON_EXTENSIONS, StructuralAnalyzer
+from .structural_analyzer import StructuralAnalyzer
 
 
 class Phase1Pipeline:

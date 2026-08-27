@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, Optional
 
-
-
 class Phase2LLM:
     """Small adapter around the project's existing provider abstraction."""
 
