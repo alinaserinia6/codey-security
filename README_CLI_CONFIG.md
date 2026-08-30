@@ -1,34 +1,56 @@
-# Unified CLI and Configuration
+# CLI and scenario configuration
 
-The three previous entry points are consolidated into `codey_security.py`.
+Codey-Security now has one entry point and a deliberately minimal command line.
+The command only selects the scenario. All paths, model/provider settings,
+evaluation options and input references are configured in `env_config.py` or
+`.env`.
 
 ## Commands
 
 ```bash
-python codey_security.py phase1 examples/cpp/vulnerable.cpp
-python codey_security.py phase2 examples/cpp/vulnerable.cpp --provider ollama
-python codey_security.py phase3 datasets/juliet_test.json --mode phase1
-python codey_security.py phase3 datasets/juliet_test.json --mode phase2 --provider ollama
+python codey_security.py phase1
+python codey_security.py phase2
+python codey_security.py phase3
+python codey_security.py full
 ```
 
-Run Phase 1 + Phase 2 together:
+There are intentionally no `--provider`, `--out`, `--dataset`, `--mode`, or
+other runtime options.
+
+## Scenario references
+
+The default references are defined in `_make_scenarios()` inside
+`env_config.py` and can be overridden through `.env`:
+
+```dotenv
+SCENARIO_PHASE1_SOURCE=examples/cpp/vulnerable.cpp
+SCENARIO_PHASE2_SOURCE=examples/cpp/vulnerable.cpp
+SCENARIO_PHASE3_DATASET=datasets/juliet_test.json
+SCENARIO_PHASE3_MODE=phase1
+SCENARIO_FULL_SOURCE=examples/cpp/vulnerable.cpp
+SCENARIO_FULL_DATASET=datasets/juliet_test.json
+SCENARIO_FULL_MODE=phase2
+```
+
+This means a user only runs `phase1`, `phase2`, `phase3`, or `full`; the
+configuration determines exactly what each scenario means.
+
+## Configuration precedence
+
+1. Variables exported in the shell.
+2. Values in `.env` that are not already exported.
+3. Defaults defined in `env_config.py`.
+
+Copy the template first:
 
 ```bash
-python codey_security.py full examples/cpp/vulnerable.cpp
+cp .env.example .env
 ```
 
-Run all three stages, including benchmark evaluation:
+Never commit `.env` or API keys.
 
-```bash
-python codey_security.py full examples/cpp/vulnerable.cpp \
-  --dataset datasets/juliet_test.json \
-  --provider ollama
-```
+## Recommended repository policy
 
-## Configuration
-
-All environment configuration is centralized in `env_config.py`. Copy `.env.example` to `.env` and change the values you need.
-
-The module reads environment variables without overriding variables already exported by the shell. Real API keys should never be committed.
-
-The old `run_pipeline.py`, `run_phase2.py`, and `run_phase3.py` remain as compatibility wrappers; new documentation and scripts should use `codey_security.py`.
+Keep `env_config.py` as the single source of truth for typed configuration and
+scenario definitions. Keep `.env` for machine-specific overrides such as API
+keys, model names, dataset locations and experiment paths.

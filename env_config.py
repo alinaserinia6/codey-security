@@ -1,7 +1,9 @@
-"""Centralized environment/configuration for Codey-Security.
+"""Central configuration for Codey-Security.
 
-The module intentionally uses only the Python standard library so it does not
-introduce another runtime dependency just to read .env values.
+The CLI is intentionally minimal: users choose only a command, e.g.
+`python codey_security.py phase2` or `python codey_security.py full`.
+All other runtime settings, input references and scenario parameters live here
+(or in environment variables loaded from .env).
 """
 from __future__ import annotations
 
@@ -10,12 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def _load_dotenv(path: Path | None = None) -> None:
-    """Load simple KEY=VALUE pairs from .env without overriding real env vars."""
     env_file = path or PROJECT_ROOT / ".env"
     if not env_file.exists():
         return
@@ -61,39 +61,111 @@ def _env_float(name: str, default: float) -> float:
         raise ValueError(f"{name} must be a number, got {value!r}") from exc
 
 
+def _path(value: str) -> str:
+    """Resolve relative paths against the project root while keeping output readable."""
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = PROJECT_ROOT / path
+    return str(path)
+
+
+@dataclass(frozen=True)
+class ScenarioConfig:
+    """Everything specific to one CLI scenario."""
+
+    # Main input reference. Phase 3 uses `dataset` instead.
+    source: Optional[str] = None
+    dataset: Optional[str] = None
+
+    # Phase 3 benchmark mode.
+    mode: str = "phase1"
+
+    # Outputs for that scenario.
+    output: str = "results/report.json"
+    phase1_output: Optional[str] = None
+    phase2_output: Optional[str] = None
+    evaluation_output: Optional[str] = None
+
+    # Benchmark behavior.
+    skip_missing: bool = False
+    require_cwe_match: bool = True
+
+
 @dataclass(frozen=True)
 class Config:
-    # LLM provider
+    # ------------------------------------------------------------------
+    # Global LLM configuration
+    # ------------------------------------------------------------------
     default_llm_provider: str = "ollama"
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
     ollama_host: str = "http://localhost:11434"
 
-    # Model names; leave empty to let the existing provider abstraction choose defaults.
     openai_model: Optional[str] = None
     anthropic_model: Optional[str] = None
     gemini_model: Optional[str] = None
     ollama_model: Optional[str] = None
 
+    # ------------------------------------------------------------------
     # Phase 2
+    # ------------------------------------------------------------------
     temperature: float = 0.0
     max_tokens: int = 1800
     max_groups: int = 50
     concurrency: int = 4
     context_radius: int = 8
 
+    # ------------------------------------------------------------------
     # Phase 3
+    # ------------------------------------------------------------------
     line_tolerance: int = 5
 
-    # Outputs
-    phase1_output: str = "results/phase1_report.json"
-    phase2_output: str = "results/phase2_report.json"
-    phase3_output: str = "results/phase3_result.json"
-
+    # ------------------------------------------------------------------
     # Runtime
+    # ------------------------------------------------------------------
     log_level: str = "INFO"
     debug: bool = False
+
+    # ------------------------------------------------------------------
+    # Scenario references
+    # ------------------------------------------------------------------
+    scenarios: dict[str, ScenarioConfig] = None  # type: ignore[assignment]
+
+
+def _make_scenarios() -> dict[str, ScenarioConfig]:
+    """Build all CLI scenarios from environment variables.
+
+    This is the single place where a scenario points to a source file,
+    dataset, or result file. Therefore the CLI needs no path/options.
+    """
+
+    return {
+        "phase1": ScenarioConfig(
+            source=_path(os.getenv("SCENARIO_PHASE1_SOURCE", "examples/cpp/vulnerable.cpp")),
+            output=_path(os.getenv("SCENARIO_PHASE1_OUTPUT", "results/phase1_report.json")),
+        ),
+        "phase2": ScenarioConfig(
+            source=_path(os.getenv("SCENARIO_PHASE2_SOURCE", "examples/cpp/vulnerable.cpp")),
+            output=_path(os.getenv("SCENARIO_PHASE2_OUTPUT", "results/phase2_report.json")),
+        ),
+        "phase3": ScenarioConfig(
+            dataset=_path(os.getenv("SCENARIO_PHASE3_DATASET", "datasets/juliet_test.json")),
+            mode=os.getenv("SCENARIO_PHASE3_MODE", "phase1").lower(),
+            output=_path(os.getenv("SCENARIO_PHASE3_OUTPUT", "results/phase3_result.json")),
+            skip_missing=_env_bool("SCENARIO_PHASE3_SKIP_MISSING", False),
+            require_cwe_match=_env_bool("SCENARIO_PHASE3_REQUIRE_CWE", True),
+        ),
+        "full": ScenarioConfig(
+            source=_path(os.getenv("SCENARIO_FULL_SOURCE", "examples/cpp/vulnerable.cpp")),
+            dataset=_path(os.getenv("SCENARIO_FULL_DATASET", "")) if os.getenv("SCENARIO_FULL_DATASET") else None,
+            mode=os.getenv("SCENARIO_FULL_MODE", "phase2").lower(),
+            phase1_output=_path(os.getenv("SCENARIO_FULL_PHASE1_OUTPUT", "results/phase1_report.json")),
+            phase2_output=_path(os.getenv("SCENARIO_FULL_PHASE2_OUTPUT", "results/phase2_report.json")),
+            evaluation_output=_path(os.getenv("SCENARIO_FULL_EVALUATION_OUTPUT", "results/phase3_result.json")),
+            require_cwe_match=_env_bool("SCENARIO_FULL_REQUIRE_CWE", True),
+        ),
+    }
 
 
 def get_config() -> Config:
@@ -118,17 +190,14 @@ def get_config() -> Config:
         ollama_model=os.getenv("OLLAMA_MODEL") or None,
         temperature=_env_float("PHASE2_TEMPERATURE", 0.0),
         max_tokens=_env_int("PHASE2_MAX_TOKENS", 1800),
-        max_groups=_env_int("PHASE2_MAX_GROUPS", 50),
+        max_groups=max(1, _env_int("PHASE2_MAX_GROUPS", 50)),
         concurrency=max(1, _env_int("PHASE2_CONCURRENCY", 4)),
         context_radius=max(0, _env_int("PHASE2_CONTEXT_RADIUS", 8)),
         line_tolerance=max(0, _env_int("PHASE3_LINE_TOLERANCE", 5)),
-        phase1_output=os.getenv("PHASE1_OUTPUT", "results/phase1_report.json"),
-        phase2_output=os.getenv("PHASE2_OUTPUT", "results/phase2_report.json"),
-        phase3_output=os.getenv("PHASE3_OUTPUT", "results/phase3_result.json"),
         log_level=os.getenv("LOG_LEVEL", "INFO").upper(),
         debug=_env_bool("DEBUG", False),
+        scenarios=_make_scenarios(),
     )
 
 
-# Backwards-compatible module-level object for code that expects `config.foo`.
 config = get_config()
