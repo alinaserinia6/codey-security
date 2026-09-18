@@ -41,12 +41,14 @@ def _make_phase2(config: Config):
 
     return Phase2Pipeline(
         Phase2Config(
-            provider="deepseek",
-            temperature=config.temperature,
-            max_tokens=config.max_tokens,
-            max_groups=config.max_groups,
-            concurrency=config.concurrency,
-            context_radius=config.context_radius,
+            deepseek_api_key=config.deepseek_api_key,
+            deepseek_base_url=config.deepseek_base_url,
+            deepseek_model=config.deepseek_model,
+            deepseek_temperature=config.deepseek_temperature,
+            deepseek_max_tokens=config.deepseek_max_tokens,
+            max_groups=config.phase2_max_groups,
+            concurrency=config.phase2_concurrency,
+            context_radius=config.phase2_context_radius,
         )
     )
 
@@ -118,7 +120,7 @@ def run_phase3(config: Config) -> dict[str, Any]:
         predictions,
         list(dataset),
         match_config=MatchConfig(
-            line_tolerance=config.line_tolerance,
+            line_tolerance=config.phase3_line_tolerance,
             require_cwe_when_available=scenario.require_cwe_match,
         ),
     )
@@ -176,7 +178,7 @@ def run_full(config: Config) -> dict[str, Any]:
         predictions,
         list(dataset),
         match_config=MatchConfig(
-            line_tolerance=config.line_tolerance,
+            line_tolerance=config.phase3_line_tolerance,
             require_cwe_when_available=scenario.require_cwe_match,
         ),
     )

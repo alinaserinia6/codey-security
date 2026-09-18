@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -14,9 +13,11 @@ from .models import AgentAssessment, FinalDecision, Phase2Report
 class Phase2Config:
     """Runtime configuration for the single-agent Phase 2."""
 
-    provider: Optional[str] = "deepseek"
-    temperature: float = 0.0
-    max_tokens: int = 1800
+    deepseek_api_key: Optional[str] = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
+    deepseek_temperature: float = 0.0
+    deepseek_max_tokens: int = 1800
     context_radius: int = 8
     max_groups: int = 50
     concurrency: int = 4
@@ -28,9 +29,11 @@ class Phase2Pipeline:
     def __init__(self, config: Optional[Phase2Config] = None):
         self.cfg = config or Phase2Config()
         self.llm = Phase2LLM(
-            provider="deepseek",
-            temperature=self.cfg.temperature,
-            max_tokens=self.cfg.max_tokens,
+            api_key=self.cfg.deepseek_api_key,
+            base_url=self.cfg.deepseek_base_url,
+            model=self.cfg.deepseek_model,
+            temperature=self.cfg.deepseek_temperature,
+            max_tokens=self.cfg.deepseek_max_tokens,
         )
         self._sem = asyncio.Semaphore(max(1, self.cfg.concurrency))
 
@@ -48,7 +51,7 @@ class Phase2Pipeline:
                 "input_finding_count": len(report.get("findings", [])),
                 "input_group_count": len(groups),
                 "provider": "deepseek",
-                "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
+                "model": self.cfg.deepseek_model,
                 "agent": "security",
                 "method": "single_security_agent",
             },

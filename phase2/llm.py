@@ -14,14 +14,16 @@ class Phase2LLM:
 
     def __init__(
         self,
-        provider: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: int = 1800,
     ):
-        self.provider = "deepseek"
-        self.temperature = temperature
-        self.max_tokens = max_tokens
         self.agent = SecurityAgent(
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
             temperature=temperature,
             max_tokens=max_tokens,
         )
