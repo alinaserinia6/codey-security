@@ -96,10 +96,13 @@ class Config:
     # ------------------------------------------------------------------
     # Global LLM configuration
     # ------------------------------------------------------------------
-    default_llm_provider: str = "ollama"
+    default_llm_provider: str = "deepseek"
     openai_api_key: Optional[str] = None
     anthropic_api_key: Optional[str] = None
     google_api_key: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
+    deepseek_base_url: str = "https://api.deepseek.com"
+    deepseek_model: str = "deepseek-chat"
     ollama_host: str = "http://localhost:11434"
 
     openai_model: Optional[str] = None
@@ -169,14 +172,8 @@ def _make_scenarios() -> dict[str, ScenarioConfig]:
 
 
 def get_config() -> Config:
-    provider = os.getenv("DEFAULT_LLM_PROVIDER", os.getenv("PHASE2_LLM_PROVIDER", "ollama")).lower()
-    if provider == "anthropic":
-        provider = "claude"
-    if provider not in {"openai", "claude", "gemini", "ollama"}:
-        raise ValueError(
-            "DEFAULT_LLM_PROVIDER must be one of: openai, claude, gemini, ollama; "
-            f"got {provider!r}"
-        )
+    # Phase 2 is intentionally DeepSeek-only.
+    provider = "deepseek"
 
     return Config(
         default_llm_provider=provider,

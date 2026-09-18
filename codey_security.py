@@ -41,7 +41,7 @@ def _make_phase2(config: Config):
 
     return Phase2Pipeline(
         Phase2Config(
-            provider=config.default_llm_provider,
+            provider="deepseek",
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             max_groups=config.max_groups,
