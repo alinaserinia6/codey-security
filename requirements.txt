@@ -14,3 +14,4 @@ langgraph>=1.2
 langchain-openai>=1.6
 langchain-anthropic>=1.7
 autogen-agentchat>=0.7
+generativeai>=0.0.1
