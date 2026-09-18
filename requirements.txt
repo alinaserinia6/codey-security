@@ -4,14 +4,6 @@ tree-sitter-c>=0.24,<0.25
 tree-sitter-cpp>=0.23,<0.24
 bandit>=1.8,<2
 
+openai>=1.40,<2
+
 pytest>=8,<9
-
-openai>=3
-anthropic>=1.2
-aiohttp>=3.14
-
-langgraph>=1.2
-langchain-openai>=1.6
-langchain-anthropic>=1.7
-autogen-agentchat>=0.7
-generativeai>=0.0.1

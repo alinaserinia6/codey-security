@@ -51,6 +51,13 @@ class BanditRunner(ToolRunner):
             return [], [f"bandit returned non-JSON output: {completed.stdout[-500:]}"]
 
         for item in payload.get("results", []):
+            cwe_node = item.get("issue_cwe")
+            cwe: List[str] = []
+            if isinstance(cwe_node, dict):
+                cwe_id = cwe_node.get("id")
+                if cwe_id is not None:
+                    cwe = [f"CWE-{cwe_id}"]
+
             findings.append(
                 Finding(
                     tool=self.tool_name,
@@ -61,7 +68,7 @@ class BanditRunner(ToolRunner):
                     column=item.get("col_offset"),
                     severity=str(item.get("issue_severity", "UNKNOWN")),
                     confidence=self._confidence(item.get("issue_confidence")),
-                    category=item.get("issue_cwe", {}).get("name") if isinstance(item.get("issue_cwe"), dict) else None,
+                    cwe=cwe,
                     evidence=item.get("code"),
                     raw=item,
                 )
@@ -80,6 +87,17 @@ class BanditRunner(ToolRunner):
 
 class CppcheckRunner(ToolRunner):
     tool_name = "cppcheck"
+
+    # Cppcheck routinely emits informational messages that are not security
+    # findings. Filter them out before they reach Phase 2.
+    _INFORMATIONAL_IDS = {
+        "missingInclude",
+        "missingIncludeSystem",
+        "checkersReport",
+        "unmatchedSuppression",
+        "preprocessorErrorDirective",
+    }
+    _INFORMATIONAL_SEVERITIES = {"information", "debug"}
 
     def scan(self, path: Path) -> tuple[List[Finding], List[str]]:
         if not self.available("cppcheck"):
@@ -100,6 +118,13 @@ class CppcheckRunner(ToolRunner):
             return [], []
 
         for error in errors_node.findall("error"):
+            rule_id = error.attrib.get("id", "unknown")
+            severity = error.attrib.get("severity", "").lower()
+            if severity in self._INFORMATIONAL_SEVERITIES:
+                continue
+            if rule_id in self._INFORMATIONAL_IDS:
+                continue
+
             location = error.find("location")
             file_name = location.attrib.get("file") if location is not None else None
             line = self._int_or_none(location.attrib.get("line")) if location is not None else None
@@ -109,14 +134,14 @@ class CppcheckRunner(ToolRunner):
             findings.append(
                 Finding(
                     tool=self.tool_name,
-                    rule_id=error.attrib.get("id", "unknown"),
+                    rule_id=rule_id,
                     message=error.attrib.get("verbose", error.attrib.get("msg", "")),
                     file=file_name,
                     line=line,
                     column=column,
                     severity=error.attrib.get("severity", "UNKNOWN"),
                     cwe=cwe,
-                    category=error.attrib.get("id"),
+                    category=rule_id,
                     evidence=error.attrib.get("msg"),
                     raw=error.attrib,
                 )
@@ -204,7 +229,11 @@ class FlawfinderRunner(ToolRunner):
     def _split_cwes(value: Optional[str]) -> List[str]:
         if not value:
             return []
-        return [token.strip().upper() for token in value.replace(";", ",").split(",") if token.strip().upper().startswith("CWE-")]
+        return [
+            token.strip().upper()
+            for token in value.replace(";", ",").split(",")
+            if token.strip().upper().startswith("CWE-")
+        ]
 
 
 class ClangStaticAnalyzerRunner(ToolRunner):
@@ -248,7 +277,8 @@ class ClangStaticAnalyzerRunner(ToolRunner):
 
             if completed.returncode not in (0, 1):
                 errors.append(
-                    f"scan-build exited with {completed.returncode}: {completed.stderr[-1000:] or completed.stdout[-1000:]}"
+                    f"scan-build exited with {completed.returncode}: "
+                    f"{completed.stderr[-1000:] or completed.stdout[-1000:]}"
                 )
         return findings, errors
 
@@ -263,7 +293,6 @@ class ClangStaticAnalyzerRunner(ToolRunner):
             file_name = location.get("file")
             line = location.get("line")
             column = location.get("col")
-            cwe = self._cwe_from_category(diagnostic.get("category", ""), message)
             findings.append(
                 Finding(
                     tool=self.tool_name,
@@ -273,16 +302,10 @@ class ClangStaticAnalyzerRunner(ToolRunner):
                     line=int(line) if isinstance(line, int) else None,
                     column=int(column) if isinstance(column, int) else None,
                     severity="HIGH",
-                    cwe=cwe,
+                    cwe=[],
                     category=diagnostic.get("category"),
                     evidence=message,
                     raw=diagnostic,
                 )
             )
         return findings
-
-    @staticmethod
-    def _cwe_from_category(category: str, message: str) -> List[str]:
-        # Clang analyzer checkers do not universally expose CWE identifiers.
-        # Keep this conservative; CWE enrichment can be added later.
-        return []

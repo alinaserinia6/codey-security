@@ -17,15 +17,20 @@ import argparse
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List
 
 from env_config import Config, ScenarioConfig, get_config
+
+__version__ = "0.5.0"
 
 
 def _write_json(value: Any, path: str) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    target.write_text(
+        json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
     print(f"Report written to {target}")
 
 
@@ -52,6 +57,68 @@ def _make_phase2(config: Config):
             context_radius=config.phase2_context_radius,
         )
     )
+
+
+def _source_files(pipeline, path: Path) -> List[Path]:
+    """Return a sorted list of analyzable source files for `path`.
+
+    When `path` is a file, returns [file]. When it is a directory, delegates
+    to the structural analyzer's language-aware discovery.
+    """
+    if path.is_file():
+        return [path]
+    discovered = pipeline.structural.analyze_path(path, recursive=True)
+    files: List[Path] = []
+    for item in discovered:
+        if "error" in item:
+            continue
+        files.append(Path(item["path"]))
+    return sorted(files)
+
+
+def _merge_phase2_reports(root: str, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Merge per-file Phase 2 reports into one directory-level report.
+
+    Each decision is preserved as-is (including its group_id and source
+    location). Aggregated counts are recomputed across all files.
+    """
+    decisions: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    file_entries: List[Dict[str, Any]] = []
+    for report in reports:
+        file_entries.append(
+            {
+                "source": report.get("source"),
+                "language": report.get("language"),
+                "decision_count": len(report.get("decisions", [])),
+                "input_group_count": report.get("metadata", {}).get("input_group_count", 0),
+            }
+        )
+        decisions.extend(report.get("decisions", []))
+        for err in report.get("errors", []):
+            errors.append(f"{report.get('source', '<unknown>')}: {err}")
+
+    counts = {
+        status: sum(1 for d in decisions if d.get("status") == status)
+        for status in ("CONFIRMED", "REJECTED", "UNCERTAIN")
+    }
+
+    return {
+        "source": root,
+        "language": "mixed" if len({e["language"] for e in file_entries}) > 1 else (
+            file_entries[0]["language"] if file_entries else "unknown"
+        ),
+        "decisions": decisions,
+        "errors": errors,
+        "metadata": {
+            "file_count": len(file_entries),
+            "files": file_entries,
+            "decision_counts": counts,
+            "provider": "openrouter",
+            "agent": "security",
+            "method": "single_security_agent",
+        },
+    }
 
 
 def run_phase1(config: Config) -> dict[str, Any]:
@@ -81,11 +148,44 @@ def run_phase2(config: Config) -> dict[str, Any]:
     if not source.exists():
         raise FileNotFoundError(f"Phase 2 source does not exist: {source}")
 
-    phase1 = Phase1Pipeline().analyze_path(str(source))
-    phase2 = _make_phase2(config)
-    result = asyncio.run(phase2.analyze_report(phase1))
-    _write_json(result, scenario.output)
-    return result
+    phase1_pipeline = Phase1Pipeline()
+    phase2_pipeline = _make_phase2(config)
+
+    if source.is_file():
+        # Single-file fast path — identical to before.
+        phase1 = phase1_pipeline.analyze_file(source)
+        result = asyncio.run(phase2_pipeline.analyze_report(phase1))
+        _write_json(result, scenario.output)
+        return result
+
+    # Directory path — iterate over every analyzable file and merge.
+    files = _source_files(phase1_pipeline, source)
+    if not files:
+        raise FileNotFoundError(
+            f"No analyzable source files under: {source}"
+        )
+
+    print(f"Phase 2: analyzing {len(files)} file(s) under {source}")
+    per_file_reports: List[Dict[str, Any]] = []
+    for path in files:
+        phase1 = phase1_pipeline.analyze_file(path)
+        try:
+            report = asyncio.run(phase2_pipeline.analyze_report(phase1))
+            per_file_reports.append(report)
+        except Exception as exc:  # noqa: BLE001
+            per_file_reports.append(
+                {
+                    "source": str(path),
+                    "language": phase1.get("language", "unknown"),
+                    "decisions": [],
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                    "metadata": {"input_group_count": 0},
+                }
+            )
+
+    merged = _merge_phase2_reports(str(source), per_file_reports)
+    _write_json(merged, scenario.output)
+    return merged
 
 
 def run_phase3(config: Config) -> dict[str, Any]:
@@ -144,12 +244,39 @@ def run_full(config: Config) -> dict[str, Any]:
         raise FileNotFoundError(f"Full-pipeline source does not exist: {source}")
 
     print("[1/3] Running Phase 1...")
-    phase1 = Phase1Pipeline().analyze_path(str(source))
+    phase1_pipeline = Phase1Pipeline()
+    if source.is_file():
+        phase1 = phase1_pipeline.analyze_file(source)
+    else:
+        phase1 = phase1_pipeline.analyze_path(str(source))
     _write_json(phase1, scenario.phase1_output or "results/phase1_report.json")
 
     print("[2/3] Running Phase 2...")
     phase2_pipeline = _make_phase2(config)
-    phase2 = asyncio.run(phase2_pipeline.analyze_report(phase1))
+    if source.is_file():
+        phase2 = asyncio.run(phase2_pipeline.analyze_report(phase1))
+    else:
+        files = _source_files(phase1_pipeline, source)
+        if not files:
+            raise FileNotFoundError(f"No analyzable source files under: {source}")
+        per_file_reports: List[Dict[str, Any]] = []
+        for path in files:
+            file_phase1 = phase1_pipeline.analyze_file(path)
+            try:
+                per_file_reports.append(
+                    asyncio.run(phase2_pipeline.analyze_report(file_phase1))
+                )
+            except Exception as exc:  # noqa: BLE001
+                per_file_reports.append(
+                    {
+                        "source": str(path),
+                        "language": file_phase1.get("language", "unknown"),
+                        "decisions": [],
+                        "errors": [f"{type(exc).__name__}: {exc}"],
+                        "metadata": {"input_group_count": 0},
+                    }
+                )
+        phase2 = _merge_phase2_reports(str(source), per_file_reports)
     _write_json(phase2, scenario.phase2_output or "results/phase2_report.json")
 
     if not scenario.dataset:
@@ -157,8 +284,6 @@ def run_full(config: Config) -> dict[str, Any]:
         return {"phase1": phase1, "phase2": phase2}
 
     print("[3/3] Running Phase 3 evaluation...")
-    # Reuse the Phase 3 benchmark machinery. The configured dataset is the
-    # authoritative reference; no runtime CLI options are needed.
     from phase3.dataset import GroundTruthDataset
     from phase3.evaluator import evaluate
     from phase3.matcher import MatchConfig
@@ -166,11 +291,12 @@ def run_full(config: Config) -> dict[str, Any]:
     from phase3.runner import run_phase1_benchmark, run_phase2_benchmark
 
     dataset = GroundTruthDataset.from_json(str(Path(scenario.dataset)))
-    phase1_pipeline = Phase1Pipeline()
     if scenario.mode == "phase1":
         predictions, reports = run_phase1_benchmark(dataset, phase1_pipeline)
     elif scenario.mode == "phase2":
-        predictions, reports = run_phase2_benchmark(dataset, phase1_pipeline, phase2_pipeline)
+        predictions, reports = run_phase2_benchmark(
+            dataset, phase1_pipeline, phase2_pipeline
+        )
     else:
         raise ValueError("SCENARIO_FULL_MODE must be 'phase1' or 'phase2'")
 
@@ -195,7 +321,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="codey-security",
         description="Codey-Security vulnerability analysis pipeline.",
     )
-    parser.add_argument("--version", action="version", version="Codey-Security 0.5.0")
+    parser.add_argument(
+        "--version", action="version", version=f"Codey-Security {__version__}"
+    )
     parser.add_argument(
         "command",
         choices=("phase1", "phase2", "phase3", "full"),

@@ -4,9 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "codey-security"
-version = "0.3.0"
-description = "Evidence-driven multi-agent vulnerability analysis for Python and C/C++"
+version = "0.5.0"
+description = "Evidence-driven vulnerability analysis for Python and C/C++"
 requires-python = ">=3.10"
+
+[tool.setuptools]
+py-modules = ["env_config", "codey_security"]
+
+[tool.setuptools.packages.find]
+include = ["analyzers*", "phase2*", "phase3*", "agents*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

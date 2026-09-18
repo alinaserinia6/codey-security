@@ -87,47 +87,136 @@ def deduplicate_findings(findings: List[Finding]) -> List[Finding]:
     return result
 
 
-def correlate_findings(findings: List[Finding], line_tolerance: int = 2) -> List[Dict[str, Any]]:
-    """
-    Correlate findings that likely describe the same source-level issue.
+def _function_at_line(
+    functions: List[Dict[str, Any]], line: Optional[int]
+) -> Optional[Dict[str, Any]]:
+    """Return the innermost function whose line range contains `line`.
 
-    This intentionally uses a conservative location/CWE key. It is not the
-    final semantic correlator; the multi-agent layer can later refine these groups.
+    When functions are nested (Python) the smallest enclosing function wins.
     """
+    if line is None:
+        return None
+    best: Optional[Dict[str, Any]] = None
+    best_span: Optional[int] = None
+    for fn in functions:
+        start = fn.get("start_line")
+        end = fn.get("end_line")
+        if start is None or end is None:
+            continue
+        if start <= line <= end:
+            span = end - start
+            if best_span is None or span < best_span:
+                best = fn
+                best_span = span
+    return best
+
+
+def _same_function(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]]) -> bool:
+    if a is None or b is None:
+        return False
+    return (
+        a.get("name") == b.get("name")
+        and a.get("start_line") == b.get("start_line")
+        and a.get("end_line") == b.get("end_line")
+    )
+
+
+def correlate_findings(
+    findings: List[Finding],
+    functions: Optional[List[Dict[str, Any]]] = None,
+    line_tolerance: int = 2,
+) -> List[Dict[str, Any]]:
+    """Correlate findings that likely describe the same source-level issue.
+
+    Grouping rules (applied in order, first match wins):
+
+    1. Same file + same function scope + shared CWE. This catches the case
+       where a single vulnerability surfaces at multiple lines inside one
+       function (e.g. a buffer declaration and the unsafe call site).
+    2. Same file + lines within ``line_tolerance`` + (shared CWE or same rule
+       family). The original conservative proximity heuristic.
+
+    The canonical location of each group is the highest-severity member (ties
+    broken by earliest line) so Phase 2 reviews the dangerous operation rather
+    than an arbitrary line in the cluster.
+    """
+    functions = functions or []
+
+    # Bucket by file so we never accidentally compare across files.
+    by_file: Dict[str, List[Finding]] = {}
+    fileless: List[Finding] = []
+    for f in findings:
+        if f.file:
+            by_file.setdefault(f.file, []).append(f)
+        else:
+            fileless.append(f)
+
     groups: List[List[Finding]] = []
 
-    for finding in findings:
-        matched = None
-        for group in groups:
-            representative = group[0]
-            same_file = bool(finding.file and representative.file and finding.file == representative.file)
-            near_line = (
-                finding.line is not None
-                and representative.line is not None
-                and abs(finding.line - representative.line) <= line_tolerance
-            )
-            shared_cwe = bool(set(finding.cwe) & set(representative.cwe))
-            same_rule_family = finding.rule_id.split(".")[0] == representative.rule_id.split(".")[0]
+    def try_add_group(items: List[Finding]) -> None:
+        for finding in items:
+            finding_fn = _function_at_line(functions, finding.line)
+            matched: Optional[List[Finding]] = None
 
-            if same_file and near_line and (shared_cwe or same_rule_family):
-                matched = group
-                break
+            for group in groups:
+                # All members of a group already share a file, but check
+                # explicitly to be defensive if the caller reuses groups.
+                if group[0].file != finding.file:
+                    continue
 
-        if matched is None:
-            groups.append([finding])
-        else:
-            matched.append(finding)
+                for member in group:
+                    shared_cwe = bool(set(finding.cwe) & set(member.cwe))
+
+                    # Rule 1: same function scope + shared CWE.
+                    member_fn = _function_at_line(functions, member.line)
+                    if shared_cwe and _same_function(finding_fn, member_fn):
+                        matched = group
+                        break
+
+                    # Rule 2: near line + shared CWE or same rule family.
+                    same_rule_family = (
+                        finding.rule_id.split(".")[0]
+                        == member.rule_id.split(".")[0]
+                    )
+                    near_line = (
+                        finding.line is not None
+                        and member.line is not None
+                        and abs(finding.line - member.line) <= line_tolerance
+                    )
+                    if near_line and (shared_cwe or same_rule_family):
+                        matched = group
+                        break
+
+                if matched is not None:
+                    break
+
+            if matched is None:
+                groups.append([finding])
+            else:
+                matched.append(finding)
+
+    for items in by_file.values():
+        try_add_group(items)
+    # Findings without a file cannot share a scope: one group each.
+    for finding in fileless:
+        groups.append([finding])
 
     correlated: List[Dict[str, Any]] = []
     for idx, group in enumerate(groups, start=1):
-        highest = max(group, key=lambda f: _SEVERITY_ORDER.get(f.severity, 0)).severity
+        canonical = max(
+            group,
+            key=lambda f: (
+                _SEVERITY_ORDER.get(f.severity, 0),
+                -(f.line if f.line is not None else 10**9),
+            ),
+        )
         cwes = sorted({cwe for f in group for cwe in f.cwe})
         correlated.append(
             {
                 "id": f"G-{idx:04d}",
-                "file": group[0].file,
-                "line": min((f.line for f in group if f.line is not None), default=None),
-                "severity": highest,
+                "file": canonical.file,
+                "line": canonical.line,
+                "severity": canonical.severity,
                 "cwe": cwes,
                 "tools": sorted({f.tool for f in group}),
                 "finding_fingerprints": [f.fingerprint for f in group],

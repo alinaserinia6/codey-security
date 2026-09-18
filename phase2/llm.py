@@ -19,7 +19,7 @@ class Phase2LLM:
         model: Optional[str] = None,
         reasoning_enabled: bool = True,
         temperature: float = 0.0,
-        max_tokens: int = 1800,
+        max_tokens: int = 4096,
     ):
         self.reasoning_enabled = reasoning_enabled
         self.agent = SecurityAgent(
@@ -36,6 +36,8 @@ class Phase2LLM:
             payload = json.loads(prompt)
         except json.JSONDecodeError:
             payload = {"task": prompt}
+        if not isinstance(payload, dict):
+            payload = {"task": payload}
         return await self.agent.analyze(payload)
 
 

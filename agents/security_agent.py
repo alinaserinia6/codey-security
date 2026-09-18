@@ -44,6 +44,20 @@ JSON schema:
 """.strip()
 
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 class SecurityAgent:
     """The only LLM agent used by Phase 2.
 
@@ -65,20 +79,28 @@ class SecurityAgent:
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.base_url = (
-            base_url or os.getenv("OPENROUTER_BASE_URL")
+            base_url
+            or os.getenv("OPENROUTER_BASE_URL")
             or "https://openrouter.ai/api/v1"
         )
-        self.model = model or os.getenv("OPENROUTER_MODEL") or "deepseek/deepseek-v4-flash-0731:free"
+        self.model = (
+            model
+            or os.getenv("OPENROUTER_MODEL")
+            or "deepseek/deepseek-v4-flash-0731:free"
+        )
         self.temperature = (
-            float(temperature) if temperature is not None
-            else float(os.getenv("OPENROUTER_TEMPERATURE", "0.0"))
+            _safe_float(temperature, _safe_float(os.getenv("OPENROUTER_TEMPERATURE"), 0.0))
+            if temperature is not None
+            else _safe_float(os.getenv("OPENROUTER_TEMPERATURE"), 0.0)
         )
         self.max_tokens = (
-            int(max_tokens) if max_tokens is not None
-            else int(os.getenv("OPENROUTER_MAX_TOKENS", "4096"))
+            _safe_int(max_tokens, _safe_int(os.getenv("OPENROUTER_MAX_TOKENS"), 4096))
+            if max_tokens is not None
+            else _safe_int(os.getenv("OPENROUTER_MAX_TOKENS"), 4096)
         )
         self.reasoning_enabled = (
-            reasoning_enabled if reasoning_enabled is not None
+            reasoning_enabled
+            if reasoning_enabled is not None
             else os.getenv("OPENROUTER_REASONING_ENABLED", "true").lower()
             in {"1", "true", "yes", "on"}
         )
@@ -98,9 +120,7 @@ class SecurityAgent:
 
     async def analyze(self, evidence_packet: Dict[str, Any]) -> Dict[str, Any]:
         """Send one evidence packet to DeepSeek and normalize the response."""
-        prompt = json.dumps(
-            evidence_packet, ensure_ascii=False, indent=2, default=str
-        )
+        prompt = json.dumps(evidence_packet, ensure_ascii=False, indent=2, default=str)
         response = await self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -156,10 +176,7 @@ class SecurityAgent:
         if decision not in {"CONFIRMED", "REJECTED", "UNCERTAIN"}:
             decision = "UNCERTAIN"
 
-        try:
-            confidence = float(value.get("confidence", 0.0))
-        except (TypeError, ValueError):
-            confidence = 0.0
+        confidence = _safe_float(value.get("confidence"), 0.0)
         confidence = max(0.0, min(1.0, confidence))
 
         def string_list(item: Any) -> list[str]:

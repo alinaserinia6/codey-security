@@ -1,9 +1,8 @@
 # CLI and scenario configuration
 
-Codey-Security now has one entry point and a deliberately minimal command line.
-The command only selects the scenario. All paths, model/provider settings,
-evaluation options and input references are configured in `env_config.py` or
-`.env`.
+Codey-Security has one entry point and a deliberately minimal command line.
+The command only selects the scenario. All paths, model settings, evaluation
+options and input references are configured in `env_config.py` or `.env`.
 
 ## Commands
 
@@ -16,6 +15,9 @@ python codey_security.py full
 
 There are intentionally no `--provider`, `--out`, `--dataset`, `--mode`, or
 other runtime options.
+
+Phase 2 always uses the single DeepSeek Security Agent over the OpenRouter
+API. The model is selected with `OPENROUTER_MODEL`.
 
 ## Scenario references
 
@@ -32,8 +34,8 @@ SCENARIO_FULL_DATASET=datasets/juliet_test.json
 SCENARIO_FULL_MODE=phase2
 ```
 
-This means a user only runs `phase1`, `phase2`, `phase3`, or `full`; the
-configuration determines exactly what each scenario means.
+A user only runs `phase1`, `phase2`, `phase3`, or `full`; the configuration
+determines exactly what each scenario means.
 
 ## Configuration precedence
 

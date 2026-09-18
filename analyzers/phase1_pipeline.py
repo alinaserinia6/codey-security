@@ -3,11 +3,16 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from .finding import NormalizedReport, correlate_findings, deduplicate_findings
-from .static_tools import BanditRunner, ClangStaticAnalyzerRunner, CppcheckRunner, FlawfinderRunner
-from .structural_analyzer import C_EXTENSIONS, CPP_EXTENSIONS, PYTHON_EXTENSIONS, StructuralAnalyzer
+from .static_tools import (
+    BanditRunner,
+    ClangStaticAnalyzerRunner,
+    CppcheckRunner,
+    FlawfinderRunner,
+)
+from .structural_analyzer import StructuralAnalyzer
 
 
 class Phase1Pipeline:
@@ -56,9 +61,13 @@ class Phase1Pipeline:
                 report.errors.extend(errors)
 
         report.findings = deduplicate_findings(report.findings)
-        report.metadata["correlated_findings"] = correlate_findings(report.findings)
+        report.metadata["correlated_findings"] = correlate_findings(
+            report.findings,
+            functions=structural.get("functions", []),
+        )
         report.metadata["tool_count"] = len({f.tool for f in report.findings})
         report.metadata["finding_count"] = len(report.findings)
+        report.metadata["group_count"] = len(report.metadata["correlated_findings"])
         report.metadata["tool_status"] = self._tool_status(language)
         return report.to_dict()
 
@@ -68,17 +77,23 @@ class Phase1Pipeline:
             return self.analyze_file(path_obj)
 
         reports: List[Dict[str, Any]] = []
+        scan_errors: List[Dict[str, Any]] = []
         for item in self.structural.analyze_path(path_obj, recursive=True):
             if "error" in item:
-                reports.append(item)
+                scan_errors.append(
+                    {"path": item.get("path"), "error": item.get("error")}
+                )
                 continue
             reports.append(self.analyze_file(item["path"]))
+
         return {
             "root": str(path_obj),
             "reports": reports,
+            "errors": scan_errors,
             "summary": {
                 "files": len(reports),
-                "findings": sum(len(r.get("findings", [])) for r in reports if isinstance(r, dict)),
+                "findings": sum(len(r.get("findings", [])) for r in reports),
+                "skipped": len(scan_errors),
             },
         }
 
@@ -93,7 +108,9 @@ class Phase1Pipeline:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run deterministic Phase-1 structural and static analysis.")
+    parser = argparse.ArgumentParser(
+        description="Run deterministic Phase-1 structural and static analysis."
+    )
     parser.add_argument("path", help="Python/C/C++ file or source directory")
     parser.add_argument("--out", help="Write JSON report to this file")
     parser.add_argument("--no-bandit", action="store_true")
