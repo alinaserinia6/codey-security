@@ -17,13 +17,16 @@ class Phase2LLM:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: Optional[str] = None,
+        reasoning_enabled: bool = True,
         temperature: float = 0.0,
         max_tokens: int = 1800,
     ):
+        self.reasoning_enabled = reasoning_enabled
         self.agent = SecurityAgent(
             api_key=api_key,
             base_url=base_url,
             model=model,
+            reasoning_enabled=reasoning_enabled,
             temperature=temperature,
             max_tokens=max_tokens,
         )
