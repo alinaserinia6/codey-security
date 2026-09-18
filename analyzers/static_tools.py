@@ -104,7 +104,7 @@ class CppcheckRunner(ToolRunner):
             file_name = location.attrib.get("file") if location is not None else None
             line = self._int_or_none(location.attrib.get("line")) if location is not None else None
             column = self._int_or_none(location.attrib.get("column")) if location is not None else None
-            cwe = self._extract_cwe(error.attrib.get("cwe"), error.attrib.get("verbose", ""))
+            cwe = self._extract_cwe(error.attrib.get("cwe", ""), error.attrib.get("verbose", ""))
 
             findings.append(
                 Finding(
