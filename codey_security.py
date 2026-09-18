@@ -41,11 +41,12 @@ def _make_phase2(config: Config):
 
     return Phase2Pipeline(
         Phase2Config(
-            deepseek_api_key=config.deepseek_api_key,
-            deepseek_base_url=config.deepseek_base_url,
-            deepseek_model=config.deepseek_model,
-            deepseek_temperature=config.deepseek_temperature,
-            deepseek_max_tokens=config.deepseek_max_tokens,
+            openrouter_api_key=config.openrouter_api_key,
+            openrouter_base_url=config.openrouter_base_url,
+            openrouter_model=config.openrouter_model,
+            openrouter_reasoning_enabled=config.openrouter_reasoning_enabled,
+            openrouter_temperature=config.openrouter_temperature,
+            openrouter_max_tokens=config.openrouter_max_tokens,
             max_groups=config.phase2_max_groups,
             concurrency=config.phase2_concurrency,
             context_radius=config.phase2_context_radius,

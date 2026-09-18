@@ -13,11 +13,12 @@ from .models import AgentAssessment, FinalDecision, Phase2Report
 class Phase2Config:
     """Runtime configuration for the single-agent Phase 2."""
 
-    deepseek_api_key: Optional[str] = None
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
-    deepseek_temperature: float = 0.0
-    deepseek_max_tokens: int = 1800
+    openrouter_api_key: Optional[str] = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "deepseek/deepseek-v4-flash-0731:free"
+    openrouter_reasoning_enabled: bool = True
+    openrouter_temperature: float = 0.0
+    openrouter_max_tokens: int = 4096
     context_radius: int = 8
     max_groups: int = 50
     concurrency: int = 4
@@ -29,11 +30,12 @@ class Phase2Pipeline:
     def __init__(self, config: Optional[Phase2Config] = None):
         self.cfg = config or Phase2Config()
         self.llm = Phase2LLM(
-            api_key=self.cfg.deepseek_api_key,
-            base_url=self.cfg.deepseek_base_url,
-            model=self.cfg.deepseek_model,
-            temperature=self.cfg.deepseek_temperature,
-            max_tokens=self.cfg.deepseek_max_tokens,
+            api_key=self.cfg.openrouter_api_key,
+            base_url=self.cfg.openrouter_base_url,
+            model=self.cfg.openrouter_model,
+            reasoning_enabled=self.cfg.openrouter_reasoning_enabled,
+            temperature=self.cfg.openrouter_temperature,
+            max_tokens=self.cfg.openrouter_max_tokens,
         )
         self._sem = asyncio.Semaphore(max(1, self.cfg.concurrency))
 
@@ -50,8 +52,8 @@ class Phase2Pipeline:
             metadata={
                 "input_finding_count": len(report.get("findings", [])),
                 "input_group_count": len(groups),
-                "provider": "deepseek",
-                "model": self.cfg.deepseek_model,
+                "provider": "openrouter",
+                "model": self.cfg.openrouter_model,
                 "agent": "security",
                 "method": "single_security_agent",
             },

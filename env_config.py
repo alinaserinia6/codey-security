@@ -83,11 +83,12 @@ class Config:
     """Only settings actually used by the current single-agent pipeline."""
 
     # DeepSeek is the only LLM provider used by Phase 2.
-    deepseek_api_key: Optional[str] = None
-    deepseek_base_url: str = "https://api.deepseek.com"
-    deepseek_model: str = "deepseek-chat"
-    deepseek_temperature: float = 0.0
-    deepseek_max_tokens: int = 1800
+    openrouter_api_key: Optional[str] = None
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    openrouter_model: str = "deepseek/deepseek-v4-flash-0731:free"
+    openrouter_reasoning_enabled: bool = True
+    openrouter_temperature: float = 0.0
+    openrouter_max_tokens: int = 4096
 
     # Phase 2 execution.
     phase2_max_groups: int = 50
@@ -134,18 +135,19 @@ def _make_scenarios() -> dict[str, ScenarioConfig]:
 
 
 def get_config() -> Config:
-    api_key = os.getenv("DEEPSEEK_API_KEY") or None
+    api_key = os.getenv("OPENROUTER_API_KEY") or None
     if not api_key:
         # Keep configuration loading usable for Phase 1/3 Phase-1-only runs.
         # Phase 2 validates the key when the Security Agent is constructed.
         api_key = None
 
     return Config(
-        deepseek_api_key=api_key,
-        deepseek_base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/"),
-        deepseek_model=os.getenv("DEEPSEEK_MODEL", "deepseek-chat"),
-        deepseek_temperature=_env_float("DEEPSEEK_TEMPERATURE", 0.0),
-        deepseek_max_tokens=max(1, _env_int("DEEPSEEK_MAX_TOKENS", 1800)),
+        openrouter_api_key=api_key,
+        openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/"),
+        openrouter_model=os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-0731:free"),
+        openrouter_reasoning_enabled=_env_bool("OPENROUTER_REASONING_ENABLED", True),
+        openrouter_temperature=_env_float("OPENROUTER_TEMPERATURE", 0.0),
+        openrouter_max_tokens=max(1, _env_int("OPENROUTER_MAX_TOKENS", 4096)),
         phase2_max_groups=max(1, _env_int("PHASE2_MAX_GROUPS", 50)),
         phase2_concurrency=max(1, _env_int("PHASE2_CONCURRENCY", 4)),
         phase2_context_radius=max(0, _env_int("PHASE2_CONTEXT_RADIUS", 8)),

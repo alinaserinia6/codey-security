@@ -1,4 +1,4 @@
-"""Single DeepSeek-powered security verification agent."""
+"""Single OpenRouter-powered security verification agent."""
 
 from __future__ import annotations
 
@@ -49,7 +49,7 @@ class SecurityAgent:
 
     It accepts a Phase-1 evidence packet and returns a normalized security
     assessment. The OpenAI client is used only as the transport because the
-    DeepSeek API is OpenAI-compatible.
+    OpenRouter API is OpenAI-compatible.
     """
 
     def __init__(
@@ -60,27 +60,33 @@ class SecurityAgent:
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        reasoning_enabled: Optional[bool] = None,
         timeout: float = 120.0,
     ) -> None:
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
+        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.base_url = (
-            base_url or os.getenv("DEEPSEEK_BASE_URL")
-            or "https://api.deepseek.com"
+            base_url or os.getenv("OPENROUTER_BASE_URL")
+            or "https://openrouter.ai/api/v1"
         )
-        self.model = model or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+        self.model = model or os.getenv("OPENROUTER_MODEL") or "deepseek/deepseek-v4-flash-0731:free"
         self.temperature = (
             float(temperature) if temperature is not None
-            else float(os.getenv("DEEPSEEK_TEMPERATURE", "0.0"))
+            else float(os.getenv("OPENROUTER_TEMPERATURE", "0.0"))
         )
         self.max_tokens = (
             int(max_tokens) if max_tokens is not None
-            else int(os.getenv("DEEPSEEK_MAX_TOKENS", "1800"))
+            else int(os.getenv("OPENROUTER_MAX_TOKENS", "4096"))
+        )
+        self.reasoning_enabled = (
+            reasoning_enabled if reasoning_enabled is not None
+            else os.getenv("OPENROUTER_REASONING_ENABLED", "true").lower()
+            in {"1", "true", "yes", "on"}
         )
         self.timeout = timeout
 
         if not self.api_key:
             raise ValueError(
-                "DEEPSEEK_API_KEY is not configured. "
+                "OPENROUTER_API_KEY is not configured. "
                 "Set it in .env or the environment before running Phase 2."
             )
 
@@ -104,6 +110,7 @@ class SecurityAgent:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
             response_format={"type": "json_object"},
+            extra_body={"reasoning": {"enabled": self.reasoning_enabled}},
         )
         content = response.choices[0].message.content or ""
         return self._normalize(self._parse_json(content), evidence_packet)
@@ -122,23 +129,23 @@ class SecurityAgent:
     def _parse_json(content: str) -> Dict[str, Any]:
         text = (content or "").strip()
         if not text:
-            raise ValueError("DeepSeek returned an empty response")
+            raise ValueError("OpenRouter returned an empty response")
         try:
             value = json.loads(text)
         except json.JSONDecodeError as exc:
             start, end = text.find("{"), text.rfind("}")
             if start < 0 or end <= start:
                 raise ValueError(
-                    f"DeepSeek returned invalid JSON: {text[:500]}"
+                    f"OpenRouter returned invalid JSON: {text[:500]}"
                 ) from exc
             try:
                 value = json.loads(text[start:end + 1])
             except json.JSONDecodeError as nested_exc:
                 raise ValueError(
-                    f"DeepSeek returned invalid JSON: {text[:500]}"
+                    f"OpenRouter returned invalid JSON: {text[:500]}"
                 ) from nested_exc
         if not isinstance(value, dict):
-            raise ValueError("DeepSeek response must be a JSON object")
+            raise ValueError("OpenRouter response must be a JSON object")
         return value
 
     @classmethod
