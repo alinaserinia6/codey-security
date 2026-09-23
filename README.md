@@ -10,7 +10,7 @@ completed development phases:
    Tree-sitter and normalize findings from Bandit, Cppcheck, Flawfinder, and
    Clang Static Analyzer.
 2. **Phase 2 — Evidence-Aware Security Verification**: a single DeepSeek
-   Security Agent (via OpenRouter) reviews each correlated Phase 1 finding
+   Security Agent (via LLM) reviews each correlated Phase 1 finding
    together with structural evidence and source context and returns
    `CONFIRMED / REJECTED / UNCERTAIN`.
 3. **Phase 3 — Benchmark + Evaluation**: compare predictions against ground
@@ -71,7 +71,7 @@ instead of only reporting qualitative examples.
                     ┌────────────────────────┐
                     │ Security Agent         │
                     │ (DeepSeek over         │
-                    │  OpenRouter API)       │
+                    │  LLM API)       │
                     └────────────┬───────────┘
                                  │
                     CONFIRMED / REJECTED /
@@ -108,7 +108,7 @@ codey-security/
 │   └── phase1_pipeline.py          # unified Phase 1 pipeline
 │
 ├── agents/                         # LLM agents
-│   └── security_agent.py           # single OpenRouter Security Agent
+│   └── security_agent.py           # single LLM Security Agent
 │
 ├── phase2/                         # Phase 2 orchestration
 │   ├── models.py
@@ -185,17 +185,17 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 3. OpenRouter
+### 3. LLM
 
-Phase 2 uses the OpenRouter API through the OpenAI-compatible Python client.
+Phase 2 uses the LLM API through the OpenAI-compatible Python client.
 Configure your key in `.env`:
 
 ```bash
 cp .env.example .env
-# then edit .env and set OPENROUTER_API_KEY
+# then edit .env and set LLM_API_KEY
 ```
 
-`OPENROUTER_API_KEY` is only required when running Phase 2. Phase 1 and
+`LLM_API_KEY` is only required when running Phase 2. Phase 1 and
 Phase-1-only Phase 3 runs do not need it.
 
 ---
@@ -286,8 +286,8 @@ evidence is insufficient. Every response also carries a confidence score, a
 short technical rationale, explicit supporting evidence, and a list of missing
 evidence items so the decision can be audited.
 
-Phase 2 is powered by DeepSeek over the OpenRouter API. The model is
-configurable through `OPENROUTER_MODEL` and defaults to
+Phase 2 is powered by DeepSeek over the LLM API. The model is
+configurable through `LLM_MODEL` and defaults to
 `deepseek/deepseek-v4-flash-0731:free`.
 
 ---
@@ -410,7 +410,7 @@ For research runs:
 - [x] Clang Static Analyzer integration
 - [x] Normalized finding schema
 - [x] Deduplication and function-scope correlation
-- [x] Evidence-aware Security Agent over OpenRouter
+- [x] Evidence-aware Security Agent over LLM
 - [x] Ground-truth dataset schema
 - [x] Finding matcher with component-aware file matching
 - [x] Precision/Recall/F1/FPR evaluation

@@ -82,13 +82,13 @@ class ScenarioConfig:
 class Config:
     """Only settings actually used by the current single-agent pipeline."""
 
-    # DeepSeek over OpenRouter is the only LLM provider used by Phase 2.
-    openrouter_api_key: Optional[str] = None
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_model: str = "deepseek/deepseek-v4-flash-0731:free"
-    openrouter_reasoning_enabled: bool = True
-    openrouter_temperature: float = 0.0
-    openrouter_max_tokens: int = 4096
+    # DeepSeek over LLM is the only LLM provider used by Phase 2.
+    llm_api_key: Optional[str] = None
+    llm_base_url: str = ""
+    llm_model: str = ""
+    llm_reasoning_enabled: bool = True
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 4096
 
     # Phase 2 execution.
     phase2_max_groups: int = 50
@@ -137,15 +137,15 @@ def _make_scenarios() -> dict[str, ScenarioConfig]:
 def get_config() -> Config:
     # Phase 2 validates the key when the Security Agent is constructed, so
     # loading configuration is safe for Phase 1 / Phase-1-only Phase 3 runs.
-    api_key = os.getenv("OPENROUTER_API_KEY") or None
+    api_key = os.getenv("LLM_API_KEY") or None
 
     return Config(
-        openrouter_api_key=api_key,
-        openrouter_base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1").rstrip("/"),
-        openrouter_model=os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v4-flash-0731:free"),
-        openrouter_reasoning_enabled=_env_bool("OPENROUTER_REASONING_ENABLED", True),
-        openrouter_temperature=_env_float("OPENROUTER_TEMPERATURE", 0.0),
-        openrouter_max_tokens=max(1, _env_int("OPENROUTER_MAX_TOKENS", 4096)),
+        llm_api_key=api_key,
+        llm_base_url=os.getenv("LLM_BASE_URL", "https://llm.ai/api/v1").rstrip("/"),
+        llm_model=os.getenv("LLM_MODEL", "deepseek/deepseek-v4-flash-0731:free"),
+        llm_reasoning_enabled=_env_bool("LLM_REASONING_ENABLED", True),
+        llm_temperature=_env_float("LLM_TEMPERATURE", 0.0),
+        llm_max_tokens=max(1, _env_int("LLM_MAX_TOKENS", 4096)),
         phase2_max_groups=max(1, _env_int("PHASE2_MAX_GROUPS", 50)),
         phase2_concurrency=max(1, _env_int("PHASE2_CONCURRENCY", 4)),
         phase2_context_radius=max(0, _env_int("PHASE2_CONTEXT_RADIUS", 8)),

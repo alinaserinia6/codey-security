@@ -14,12 +14,12 @@ from .models import AgentAssessment, FinalDecision, Phase2Report
 class Phase2Config:
     """Runtime configuration for the single-agent Phase 2."""
 
-    openrouter_api_key: Optional[str] = None
-    openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    openrouter_model: str = "deepseek/deepseek-v4-flash-0731:free"
-    openrouter_reasoning_enabled: bool = True
-    openrouter_temperature: float = 0.0
-    openrouter_max_tokens: int = 4096
+    llm_api_key: Optional[str] = None
+    llm_base_url: str = "https://llm.ai/api/v1"
+    llm_model: str = "deepseek/deepseek-v4-flash-0731:free"
+    llm_reasoning_enabled: bool = True
+    llm_temperature: float = 0.0
+    llm_max_tokens: int = 4096
     context_radius: int = 8
     max_groups: int = 50
     concurrency: int = 4
@@ -31,12 +31,12 @@ class Phase2Pipeline:
     def __init__(self, config: Optional[Phase2Config] = None):
         self.cfg = config or Phase2Config()
         self.llm = Phase2LLM(
-            api_key=self.cfg.openrouter_api_key,
-            base_url=self.cfg.openrouter_base_url,
-            model=self.cfg.openrouter_model,
-            reasoning_enabled=self.cfg.openrouter_reasoning_enabled,
-            temperature=self.cfg.openrouter_temperature,
-            max_tokens=self.cfg.openrouter_max_tokens,
+            api_key=self.cfg.llm_api_key,
+            base_url=self.cfg.llm_base_url,
+            model=self.cfg.llm_model,
+            reasoning_enabled=self.cfg.llm_reasoning_enabled,
+            temperature=self.cfg.llm_temperature,
+            max_tokens=self.cfg.llm_max_tokens,
         )
         self._sem = asyncio.Semaphore(max(1, self.cfg.concurrency))
 
@@ -53,8 +53,8 @@ class Phase2Pipeline:
             metadata={
                 "input_finding_count": len(report.get("findings", [])),
                 "input_group_count": len(groups),
-                "provider": "openrouter",
-                "model": self.cfg.openrouter_model,
+                "provider": "llm",
+                "model": self.cfg.llm_model,
                 "agent": "security",
                 "method": "single_security_agent",
             },

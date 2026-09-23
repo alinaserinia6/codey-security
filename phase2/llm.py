@@ -9,7 +9,7 @@ from agents.security_agent import SecurityAgent
 class Phase2LLM:
     """Compatibility adapter exposing the old Phase2LLM interface.
 
-    Phase 2 is OpenRouter-only and has exactly one Security Agent.
+    Phase 2 is LLM-only and has exactly one Security Agent.
     """
 
     def __init__(

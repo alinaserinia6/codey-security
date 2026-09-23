@@ -16,8 +16,8 @@ python codey_security.py full
 There are intentionally no `--provider`, `--out`, `--dataset`, `--mode`, or
 other runtime options.
 
-Phase 2 always uses the single DeepSeek Security Agent over the OpenRouter
-API. The model is selected with `OPENROUTER_MODEL`.
+Phase 2 always uses the single DeepSeek Security Agent over the LLM
+API. The model is selected with `LLM_MODEL`.
 
 ## Scenario references
 

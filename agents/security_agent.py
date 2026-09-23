@@ -1,4 +1,4 @@
-"""Single OpenRouter-powered security verification agent."""
+"""Single LLM-powered security verification agent."""
 
 from __future__ import annotations
 
@@ -63,7 +63,7 @@ class SecurityAgent:
 
     It accepts a Phase-1 evidence packet and returns a normalized security
     assessment. The OpenAI client is used only as the transport because the
-    OpenRouter API is OpenAI-compatible.
+    LLM API is OpenAI-compatible.
     """
 
     def __init__(
@@ -77,38 +77,38 @@ class SecurityAgent:
         reasoning_enabled: Optional[bool] = None,
         timeout: float = 120.0,
     ) -> None:
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        self.api_key = api_key or os.getenv("LLM_API_KEY")
         self.base_url = (
             base_url
-            or os.getenv("OPENROUTER_BASE_URL")
-            or "https://openrouter.ai/api/v1"
+            or os.getenv("LLM_BASE_URL")
+            or "https://llm.ai/api/v1"
         )
         self.model = (
             model
-            or os.getenv("OPENROUTER_MODEL")
+            or os.getenv("LLM_MODEL")
             or "deepseek/deepseek-v4-flash-0731:free"
         )
         self.temperature = (
-            _safe_float(temperature, _safe_float(os.getenv("OPENROUTER_TEMPERATURE"), 0.0))
+            _safe_float(temperature, _safe_float(os.getenv("LLM_TEMPERATURE"), 0.0))
             if temperature is not None
-            else _safe_float(os.getenv("OPENROUTER_TEMPERATURE"), 0.0)
+            else _safe_float(os.getenv("LLM_TEMPERATURE"), 0.0)
         )
         self.max_tokens = (
-            _safe_int(max_tokens, _safe_int(os.getenv("OPENROUTER_MAX_TOKENS"), 4096))
+            _safe_int(max_tokens, _safe_int(os.getenv("LLM_MAX_TOKENS"), 4096))
             if max_tokens is not None
-            else _safe_int(os.getenv("OPENROUTER_MAX_TOKENS"), 4096)
+            else _safe_int(os.getenv("LLM_MAX_TOKENS"), 4096)
         )
         self.reasoning_enabled = (
             reasoning_enabled
             if reasoning_enabled is not None
-            else os.getenv("OPENROUTER_REASONING_ENABLED", "true").lower()
+            else os.getenv("LLM_REASONING_ENABLED", "true").lower()
             in {"1", "true", "yes", "on"}
         )
         self.timeout = timeout
 
         if not self.api_key:
             raise ValueError(
-                "OPENROUTER_API_KEY is not configured. "
+                "LLM_API_KEY is not configured. "
                 "Set it in .env or the environment before running Phase 2."
             )
 
@@ -149,23 +149,23 @@ class SecurityAgent:
     def _parse_json(content: str) -> Dict[str, Any]:
         text = (content or "").strip()
         if not text:
-            raise ValueError("OpenRouter returned an empty response")
+            raise ValueError("LLM returned an empty response")
         try:
             value = json.loads(text)
         except json.JSONDecodeError as exc:
             start, end = text.find("{"), text.rfind("}")
             if start < 0 or end <= start:
                 raise ValueError(
-                    f"OpenRouter returned invalid JSON: {text[:500]}"
+                    f"LLM returned invalid JSON: {text[:500]}"
                 ) from exc
             try:
                 value = json.loads(text[start:end + 1])
             except json.JSONDecodeError as nested_exc:
                 raise ValueError(
-                    f"OpenRouter returned invalid JSON: {text[:500]}"
+                    f"LLM returned invalid JSON: {text[:500]}"
                 ) from nested_exc
         if not isinstance(value, dict):
-            raise ValueError("OpenRouter response must be a JSON object")
+            raise ValueError("LLM response must be a JSON object")
         return value
 
     @classmethod
