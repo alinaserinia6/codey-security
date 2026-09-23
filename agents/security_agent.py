@@ -162,15 +162,6 @@ class SecurityAgent:
         content = self._extract_text(result)
         return self._normalize(self._parse_json(content), evidence_packet)
 
-    async def process(
-        self, prompt: str, context: Optional[Dict[str, Any]] = None
-    ) -> str:
-        payload: Dict[str, Any] = {"task": prompt}
-        if context is not None:
-            payload["context"] = context
-        result = await self.analyze(payload)
-        return json.dumps(result, ensure_ascii=False)
-
     # ------------------------------------------------------------------
     # Response extraction
     # ------------------------------------------------------------------
