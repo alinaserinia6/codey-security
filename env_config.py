@@ -58,6 +58,11 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
+def _env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value if value is not None and value != "" else default
+
+
 def _path(value: str) -> str:
     path = Path(value).expanduser()
     return str(path if path.is_absolute() else PROJECT_ROOT / path)
@@ -80,22 +85,28 @@ class ScenarioConfig:
 
 @dataclass(frozen=True)
 class Config:
-    """Only settings actually used by the current single-agent pipeline."""
+    """Runtime settings for the single-agent pipeline.
 
-    # DeepSeek over LLM is the only LLM provider used by Phase 2.
-    llm_api_key: Optional[str] = None
-    llm_base_url: str = ""
-    llm_model: str = ""
-    llm_reasoning_enabled: bool = True
-    llm_temperature: float = 0.0
-    llm_max_tokens: int = 4096
+    LLM settings are provider-neutral. They describe *where* to reach an
+    OpenAI-style / agent-style inference server and *how* to call it. The
+    concrete SDK that implements the transport lives entirely inside
+    `agents/security_agent.py`.
+    """
 
-    # Phase 2 execution.
+    # --- LLM transport --------------------------------------------------
+    llm_base_url: str = "http://127.0.0.1:4096"
+    llm_model_id: str = "opencode/deepseek-v4-flash-free"
+    llm_provider_id: str = "opencode"
+    llm_mode: str = "build"
+    llm_timeout: float = 300.0
+    llm_reuse_session: bool = False
+
+    # --- Phase 2 execution ---------------------------------------------
     phase2_max_groups: int = 50
     phase2_concurrency: int = 4
     phase2_context_radius: int = 8
 
-    # Phase 3 matching.
+    # --- Phase 3 matching ----------------------------------------------
     phase3_line_tolerance: int = 5
 
     scenarios: dict[str, ScenarioConfig] = field(default_factory=dict)
@@ -135,17 +146,13 @@ def _make_scenarios() -> dict[str, ScenarioConfig]:
 
 
 def get_config() -> Config:
-    # Phase 2 validates the key when the Security Agent is constructed, so
-    # loading configuration is safe for Phase 1 / Phase-1-only Phase 3 runs.
-    api_key = os.getenv("LLM_API_KEY") or None
-
     return Config(
-        llm_api_key=api_key,
-        llm_base_url=os.getenv("LLM_BASE_URL", "https://llm.ai/api/v1").rstrip("/"),
-        llm_model=os.getenv("LLM_MODEL", "deepseek/deepseek-v4-flash-0731:free"),
-        llm_reasoning_enabled=_env_bool("LLM_REASONING_ENABLED", True),
-        llm_temperature=_env_float("LLM_TEMPERATURE", 0.0),
-        llm_max_tokens=max(1, _env_int("LLM_MAX_TOKENS", 4096)),
+        llm_base_url=_env_str("LLM_BASE_URL", "http://127.0.0.1:4096").rstrip("/"),
+        llm_model_id=_env_str("LLM_MODEL_ID", "opencode/deepseek-v4-flash-free"),
+        llm_provider_id=_env_str("LLM_PROVIDER_ID", "opencode"),
+        llm_mode=_env_str("LLM_MODE", "build"),
+        llm_timeout=_env_float("LLM_TIMEOUT", 300.0),
+        llm_reuse_session=_env_bool("LLM_REUSE_SESSION", False),
         phase2_max_groups=max(1, _env_int("PHASE2_MAX_GROUPS", 50)),
         phase2_concurrency=max(1, _env_int("PHASE2_CONCURRENCY", 4)),
         phase2_context_radius=max(0, _env_int("PHASE2_CONTEXT_RADIUS", 8)),

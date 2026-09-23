@@ -14,29 +14,32 @@ from .models import AgentAssessment, FinalDecision, Phase2Report
 class Phase2Config:
     """Runtime configuration for the single-agent Phase 2."""
 
-    llm_api_key: Optional[str] = None
-    llm_base_url: str = "https://llm.ai/api/v1"
-    llm_model: str = "deepseek/deepseek-v4-flash-0731:free"
-    llm_reasoning_enabled: bool = True
-    llm_temperature: float = 0.0
-    llm_max_tokens: int = 4096
+    # LLM transport (provider-neutral)
+    llm_base_url: Optional[str] = None
+    llm_model_id: Optional[str] = None
+    llm_provider_id: Optional[str] = None
+    llm_mode: Optional[str] = None
+    llm_timeout: Optional[float] = None
+    llm_reuse_session: Optional[bool] = None
+
+    # Execution
     context_radius: int = 8
     max_groups: int = 50
     concurrency: int = 4
 
 
 class Phase2Pipeline:
-    """Verify Phase-1 findings using one DeepSeek Security Agent."""
+    """Verify Phase-1 findings using one Security Agent."""
 
     def __init__(self, config: Optional[Phase2Config] = None):
         self.cfg = config or Phase2Config()
         self.llm = Phase2LLM(
-            api_key=self.cfg.llm_api_key,
             base_url=self.cfg.llm_base_url,
-            model=self.cfg.llm_model,
-            reasoning_enabled=self.cfg.llm_reasoning_enabled,
-            temperature=self.cfg.llm_temperature,
-            max_tokens=self.cfg.llm_max_tokens,
+            model_id=self.cfg.llm_model_id,
+            provider_id=self.cfg.llm_provider_id,
+            mode=self.cfg.llm_mode,
+            timeout=self.cfg.llm_timeout,
+            reuse_session=self.cfg.llm_reuse_session,
         )
         self._sem = asyncio.Semaphore(max(1, self.cfg.concurrency))
 
@@ -45,7 +48,7 @@ class Phase2Pipeline:
         language = report.get("language", "unknown")
         groups = list(
             report.get("metadata", {}).get("correlated_findings", [])
-        )[:self.cfg.max_groups]
+        )[: self.cfg.max_groups]
 
         phase2 = Phase2Report(
             source=str(source),
@@ -53,21 +56,21 @@ class Phase2Pipeline:
             metadata={
                 "input_finding_count": len(report.get("findings", [])),
                 "input_group_count": len(groups),
-                "provider": "llm",
-                "model": self.cfg.llm_model,
                 "agent": "security",
                 "method": "single_security_agent",
             },
         )
 
         results = await asyncio.gather(
-            *[self._analyze_group(source, language, group, report)
-              for group in groups],
+            *[
+                self._analyze_group(source, language, group, report)
+                for group in groups
+            ],
             return_exceptions=True,
         )
         for result in results:
             if isinstance(result, Exception):
-                phase2.errors.append(str(result))
+                phase2.errors.append(f"{type(result).__name__}: {result}")
             elif result is not None:
                 phase2.decisions.append(result)
 
@@ -100,24 +103,27 @@ class Phase2Pipeline:
 
             try:
                 value = await self.llm.ask_json(
-                    system="", prompt=json.dumps(
+                    system="",
+                    prompt=json.dumps(
                         packet, ensure_ascii=False, indent=2, default=str
-                    )
+                    ),
                 )
                 assessment = self._assessment_from_result(value, group)
-                cwe = self._string_list(value.get("cwe")) or \
-                    self._string_list(group.get("cwe"))
+                cwe = (
+                    self._string_list(value.get("cwe"))
+                    or self._string_list(group.get("cwe"))
+                )
                 severity = str(
                     value.get("severity") or group.get("severity") or "UNKNOWN"
                 ).upper()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 assessment = AgentAssessment(
                     agent="security",
                     decision="UNCERTAIN",
                     confidence=0.0,
                     rationale=f"Security Agent failure: {exc}",
                     missing_evidence=[
-                        "A valid DeepSeek security assessment was not returned."
+                        "A valid security assessment was not returned."
                     ],
                     source_location=self._location(group),
                 )

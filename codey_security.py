@@ -46,18 +46,17 @@ def _make_phase2(config: Config):
 
     return Phase2Pipeline(
         Phase2Config(
-            llm_api_key=config.llm_api_key,
             llm_base_url=config.llm_base_url,
-            llm_model=config.llm_model,
-            llm_reasoning_enabled=config.llm_reasoning_enabled,
-            llm_temperature=config.llm_temperature,
-            llm_max_tokens=config.llm_max_tokens,
+            llm_model_id=config.llm_model_id,
+            llm_provider_id=config.llm_provider_id,
+            llm_mode=config.llm_mode,
+            llm_timeout=config.llm_timeout,
+            llm_reuse_session=config.llm_reuse_session,
             max_groups=config.phase2_max_groups,
             concurrency=config.phase2_concurrency,
             context_radius=config.phase2_context_radius,
         )
     )
-
 
 def _source_files(pipeline, path: Path) -> List[Path]:
     """Return a sorted list of analyzable source files for `path`.

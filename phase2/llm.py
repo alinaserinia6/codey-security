@@ -7,28 +7,25 @@ from agents.security_agent import SecurityAgent
 
 
 class Phase2LLM:
-    """Compatibility adapter exposing the old Phase2LLM interface.
-
-    Phase 2 is LLM-only and has exactly one Security Agent.
-    """
+    """Adapter that exposes the JSON-in / dict-out interface Phase 2 expects."""
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
+        *,
         base_url: Optional[str] = None,
-        model: Optional[str] = None,
-        reasoning_enabled: bool = True,
-        temperature: float = 0.0,
-        max_tokens: int = 4096,
+        model_id: Optional[str] = None,
+        provider_id: Optional[str] = None,
+        mode: Optional[str] = None,
+        timeout: Optional[float] = None,
+        reuse_session: Optional[bool] = None,
     ):
-        self.reasoning_enabled = reasoning_enabled
         self.agent = SecurityAgent(
-            api_key=api_key,
             base_url=base_url,
-            model=model,
-            reasoning_enabled=reasoning_enabled,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            model_id=model_id,
+            provider_id=provider_id,
+            mode=mode,
+            timeout=timeout,
+            reuse_session=reuse_session,
         )
 
     async def ask_json(self, *, system: str, prompt: str) -> Dict[str, Any]:

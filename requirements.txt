@@ -5,5 +5,6 @@ tree-sitter-cpp>=0.23,<0.24
 bandit>=1.8,<2
 
 openai>=1.40,<2
+opencode-ai
 
 pytest>=8,<9
