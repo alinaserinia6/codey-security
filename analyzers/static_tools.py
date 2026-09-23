@@ -161,9 +161,17 @@ class CppcheckRunner(ToolRunner):
     def _extract_cwe(*texts: str) -> List[str]:
         result: List[str] = []
         for text in texts:
-            for token in text.replace(",", " ").split():
-                if token.upper().startswith("CWE-"):
-                    result.append(token.upper().rstrip(";"))
+            normalized = (
+                text.replace("!/", ",")
+                .replace(";", ",")
+                .replace("/", ",")
+                .replace(":", " ")
+            )
+            for token in normalized.split():
+                for piece in token.split(","):
+                    piece = piece.strip().upper()
+                    if piece.startswith("CWE-"):
+                        result.append(piece)
         return sorted(set(result))
 
 
@@ -227,13 +235,25 @@ class FlawfinderRunner(ToolRunner):
 
     @staticmethod
     def _split_cwes(value: Optional[str]) -> List[str]:
+        """Split Flawfinder's CWEs column into individual identifiers.
+
+        Flawfinder encodes "or" with `!/`, so a cell can read
+        `CWE-119!/CWE-120`. It also occasionally uses `;` or `,` as
+        separators. Normalize all of these to a single delimiter.
+        """
         if not value:
             return []
-        return [
-            token.strip().upper()
-            for token in value.replace(";", ",").split(",")
-            if token.strip().upper().startswith("CWE-")
-        ]
+        normalized = (
+            value.replace("!/", ",")
+            .replace(";", ",")
+            .replace("/", ",")
+        )
+        result = []
+        for token in normalized.split(","):
+            token = token.strip().upper()
+            if token.startswith("CWE-"):
+                result.append(token)
+        return sorted(set(result))
 
 
 class ClangStaticAnalyzerRunner(ToolRunner):
