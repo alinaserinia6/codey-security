@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
+import os, sys
+import textwrap
 from typing import Any, Dict, List, Optional
 
 from opencode_ai import Opencode
@@ -159,54 +160,181 @@ class SecurityAgent:
                 f"LLM request timed out after {self.timeout}s"
             ) from exc
 
-        content = self._extract_text(result)
-        return self._normalize(self._parse_json(content), evidence_packet)
+        parts = self._extract_parts(result)
+
+        # Stream reasoning to stderr as soon as it's available.
+        if parts["thinking"]:
+            try:
+                self._thinking_printer(parts["thinking"])
+            except Exception:  # noqa: BLE001
+                pass
+
+        assessment = self._normalize(
+            self._parse_json(parts["text"]), evidence_packet
+        )
+        assessment["thinking"] = parts["thinking"]
+        return assessment
 
     # ------------------------------------------------------------------
     # Response extraction
     # ------------------------------------------------------------------
-    @staticmethod
-    def _extract_text(result: Any) -> str:
+
+    # Part types that carry the model's reasoning rather than the answer.
+    _THINKING_PART_TYPES = {"reasoning", "thinking", "analysis", "thought"}
+    _IGNORED_PART_TYPES = {"step-start", "step-finish", "tool_call", "tool_result"}
+
+    @classmethod
+    def _extract_parts(cls, result: Any) -> Dict[str, str]:
+        """Return {"text": ..., "thinking": ...} from an OpenCode response.
+
+        OpenCode emits a `parts` list where each element has a `type`
+        discriminator: 'step-start', 'reasoning', 'text', 'step-finish'.
+        The reasoning part carries the model's thinking; the text part
+        carries the final JSON answer.
+        """
         if result is None:
             raise ValueError("LLM returned None")
 
-        parts = getattr(result, "parts", None)
-        if parts is None and isinstance(result, dict):
-            parts = result.get("parts")
+        # Flatten the top-level Pydantic model so `parts` becomes plain dicts.
+        if hasattr(result, "model_dump"):
+            try:
+                result = result.model_dump()
+            except Exception:
+                pass
+
+        parts = (
+            result.get("parts")
+            if isinstance(result, dict)
+            else getattr(result, "parts", None)
+        )
+
+        text_chunks: List[str] = []
+        thinking_chunks: List[str] = []
 
         if parts:
-            chunks: List[str] = []
             for part in parts:
-                ptype = getattr(part, "type", None)
-                if ptype is None and isinstance(part, dict):
-                    ptype = part.get("type")
-                if ptype is not None and ptype != "text":
+                # Each part is a Pydantic union member; model_dump exposes `type`.
+                if hasattr(part, "model_dump"):
+                    try:
+                        part = part.model_dump()
+                    except Exception:
+                        pass
+
+                if isinstance(part, dict):
+                    ptype = str(part.get("type") or "").lower()
+                    ptext = part.get("text")
+                else:
+                    ptype = str(getattr(part, "type", "") or "").lower()
+                    ptext = getattr(part, "text", None)
+
+                if not isinstance(ptext, str) or not ptext.strip():
                     continue
-                text = getattr(part, "text", None)
-                if text is None and isinstance(part, dict):
-                    text = part.get("text")
-                if text:
-                    chunks.append(str(text))
-            if chunks:
-                return "\n".join(chunks)
 
-        for attr in ("text", "content", "message", "output"):
-            value = getattr(result, attr, None)
-            if value is None and isinstance(result, dict):
-                value = result.get(attr)
-            if isinstance(value, str) and value.strip():
-                return value
+                if ptype in cls._THINKING_PART_TYPES:
+                    thinking_chunks.append(ptext)
+                elif ptype == "text":
+                    text_chunks.append(ptext)
+                elif ptype in cls._IGNORED_PART_TYPES:
+                    continue
+                else:
+                    # Unknown type: treat as answer text so nothing is lost.
+                    text_chunks.append(ptext)
 
-        data = getattr(result, "data", None)
-        if data is None and isinstance(result, dict):
-            data = result.get("data")
-        if data is not None and data is not result:
-            return SecurityAgent._extract_text(data)
+        # Fallbacks for non-OpenCode servers.
+        if not text_chunks:
+            for attr in ("text", "content", "message", "output"):
+                v = (
+                    result.get(attr)
+                    if isinstance(result, dict)
+                    else getattr(result, attr, None)
+                )
+                if isinstance(v, str) and v.strip():
+                    text_chunks.append(v)
+                    break
 
-        raise ValueError(
-            "Could not extract assistant text from LLM response "
-            f"(type={type(result).__name__}): {str(result)[:300]}"
-        )
+        if not thinking_chunks:
+            for attr in ("reasoning", "thinking", "analysis"):
+                v = (
+                    result.get(attr)
+                    if isinstance(result, dict)
+                    else getattr(result, attr, None)
+                )
+                if isinstance(v, str) and v.strip():
+                    thinking_chunks.append(v)
+                    break
+
+        if not text_chunks:
+            err = (
+                result.get("error")
+                if isinstance(result, dict)
+                else getattr(result, "error", None)
+            )
+            if err:
+                raise ValueError(f"LLM server returned an error: {err}")
+            raise ValueError(
+                "Could not extract assistant text from LLM response. "
+                f"Dump: {str(result)[:500]}"
+            )
+
+        return {
+            "text": "\n".join(text_chunks),
+            "thinking": "\n".join(thinking_chunks),
+        }
+
+    # ------------------------------------------------------------------
+    # Thinking printer
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _thinking_printer(chunk: str) -> None:
+        """Print model reasoning to stderr, word-wrapped inside an open box.
+
+        Long lines are broken at word boundaries so the box never overflows
+        the terminal. The top and bottom rules are sized from the actual
+        widest content line (plus a small margin), so they always frame the
+        text correctly regardless of terminal width.
+        """
+
+        chunk = (chunk or "").strip()
+        if not chunk:
+            return
+
+        # Wrap each paragraph at this column. textwrap handles word
+        # boundaries and preserves intentional blank lines.
+        wrap_width = 90
+
+        wrapped: list[str] = []
+        for raw_line in chunk.splitlines():
+            if not raw_line.strip():
+                wrapped.append("")
+                continue
+            # Preserve leading indentation from the model's own formatting.
+            indent = len(raw_line) - len(raw_line.lstrip(" "))
+            prefix = " " * indent
+            pieces = textwrap.wrap(
+                raw_line.strip(),
+                width=wrap_width - indent,
+                break_long_words=False,
+                break_on_hyphens=False,
+            )
+            for piece in pieces:
+                wrapped.append(prefix + piece)
+
+        if not wrapped:
+            return
+
+        # Top/bottom rules are sized to the longest content line plus margin.
+        content_width = max(len(line) for line in wrapped)
+        bar_width = max(content_width + 4, 40)
+
+        label = " thinking "
+        top = "┌─" + label + "─" * (bar_width - 2 - len(label))
+        bottom = "└" + "─" * (bar_width - 1)
+
+        print(f"\n{top}", file=sys.stderr)
+        for line in wrapped:
+            print(f"│ {line}", file=sys.stderr)
+        print(bottom, file=sys.stderr, flush=True)
 
     # ------------------------------------------------------------------
     # JSON parsing

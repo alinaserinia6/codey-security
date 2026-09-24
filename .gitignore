@@ -13,3 +13,4 @@ results/*.json
 results/*.csv
 results/*.html
 *.log
+datasets/

@@ -47,11 +47,17 @@ def match_score(pred: Prediction, gt: GroundTruth, cfg: MatchConfig) -> Tuple[fl
     reasons = ["file match"]
     score = 0.4
 
-    if cfg.require_cwe_when_available and gt.cwe and pred.cwe and not (set(pred.cwe) & set(gt.cwe)):
-        return 0.0, "CWE mismatch"
-    if gt.cwe and pred.cwe and (set(pred.cwe) & set(gt.cwe)):
-        score += 0.25
-        reasons.append("CWE overlap")
+    # CWE policy: when the ground truth declares a CWE, the prediction must
+    # overlap with it. A CWE-less prediction cannot be credited as a match,
+    # otherwise any warning in the same file counts as a TP.
+    if gt.cwe:
+        if not pred.cwe:
+            return 0.0, "prediction has no CWE; cannot match CWE-bearing ground truth"
+        if cfg.require_cwe_when_available and not (set(pred.cwe) & set(gt.cwe)):
+            return 0.0, "CWE mismatch"
+        if set(pred.cwe) & set(gt.cwe):
+            score += 0.25
+            reasons.append("CWE overlap")
 
     if gt.line is not None and pred.line is not None:
         delta = abs(gt.line - pred.line)
@@ -63,7 +69,6 @@ def match_score(pred: Prediction, gt: GroundTruth, cfg: MatchConfig) -> Tuple[fl
         score += 0.10
 
     return min(score, 1.0), "; ".join(reasons)
-
 
 def greedy_match(
     predictions: Sequence[Prediction],

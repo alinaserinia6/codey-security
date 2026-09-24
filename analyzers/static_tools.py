@@ -96,8 +96,17 @@ class CppcheckRunner(ToolRunner):
         "checkersReport",
         "unmatchedSuppression",
         "preprocessorErrorDirective",
+        "unusedFunction",
     }
     _INFORMATIONAL_SEVERITIES = {"information", "debug"}
+
+    _SYNTAX_NOISE_IDS = {
+        "syntaxError",
+        "preprocessorErrorDirective",
+        "unknownMacro",
+        "badMacro",
+        "unhandledException",
+    }
 
     def scan(self, path: Path) -> tuple[List[Finding], List[str]]:
         if not self.available("cppcheck"):
@@ -123,6 +132,8 @@ class CppcheckRunner(ToolRunner):
             if severity in self._INFORMATIONAL_SEVERITIES:
                 continue
             if rule_id in self._INFORMATIONAL_IDS:
+                continue
+            if rule_id in self._SYNTAX_NOISE_IDS:
                 continue
 
             location = error.find("location")
@@ -161,17 +172,20 @@ class CppcheckRunner(ToolRunner):
     def _extract_cwe(*texts: str) -> List[str]:
         result: List[str] = []
         for text in texts:
+            if not text:
+                continue
+            # Split on common separators and normalize.
             normalized = (
-                text.replace("!/", ",")
-                .replace(";", ",")
-                .replace("/", ",")
-                .replace(":", " ")
+                text.replace("!/", ",").replace(";", ",").replace("/", ",")
             )
             for token in normalized.split():
                 for piece in token.split(","):
                     piece = piece.strip().upper()
                     if piece.startswith("CWE-"):
                         result.append(piece)
+                    elif piece.isdigit():
+                        # cppcheck 2.14+ emits bare CWE numbers.
+                        result.append(f"CWE-{int(piece)}")
         return sorted(set(result))
 
 
