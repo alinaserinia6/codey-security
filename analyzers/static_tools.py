@@ -88,24 +88,18 @@ class BanditRunner(ToolRunner):
 class CppcheckRunner(ToolRunner):
     tool_name = "cppcheck"
 
-    # Cppcheck routinely emits informational messages that are not security
-    # findings. Filter them out before they reach Phase 2.
-    _INFORMATIONAL_IDS = {
-        "missingInclude",
-        "missingIncludeSystem",
-        "checkersReport",
-        "unmatchedSuppression",
-        "preprocessorErrorDirective",
-        "unusedFunction",
+    # Findings whose severity is not security-relevant.
+    _SKIPPED_SEVERITIES = {
+        "information", "debug", "style", "performance", "portability",
     }
-    _INFORMATIONAL_SEVERITIES = {"information", "debug"}
+
+    _INFORMATIONAL_IDS = {
+        "missingInclude", "missingIncludeSystem", "checkersReport",
+        "unmatchedSuppression", "preprocessorErrorDirective",
+    }
 
     _SYNTAX_NOISE_IDS = {
-        "syntaxError",
-        "preprocessorErrorDirective",
-        "unknownMacro",
-        "badMacro",
-        "unhandledException",
+        "syntaxError", "unknownMacro", "badMacro", "unhandledException",
     }
 
     def scan(self, path: Path) -> tuple[List[Finding], List[str]]:
@@ -129,7 +123,8 @@ class CppcheckRunner(ToolRunner):
         for error in errors_node.findall("error"):
             rule_id = error.attrib.get("id", "unknown")
             severity = error.attrib.get("severity", "").lower()
-            if severity in self._INFORMATIONAL_SEVERITIES:
+
+            if severity in self._SKIPPED_SEVERITIES:
                 continue
             if rule_id in self._INFORMATIONAL_IDS:
                 continue
@@ -140,7 +135,13 @@ class CppcheckRunner(ToolRunner):
             file_name = location.attrib.get("file") if location is not None else None
             line = self._int_or_none(location.attrib.get("line")) if location is not None else None
             column = self._int_or_none(location.attrib.get("column")) if location is not None else None
-            cwe = self._extract_cwe(error.attrib.get("cwe", ""), error.attrib.get("verbose", ""))
+
+            # CWE: cppcheck 2.14+ emits bare numbers ("398"), older versions
+            # emit "CWE-398". Handle both.
+            cwe = self._extract_cwe(
+                error.attrib.get("cwe", ""),
+                error.attrib.get("verbose", ""),
+            )
 
             findings.append(
                 Finding(
