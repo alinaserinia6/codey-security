@@ -58,6 +58,7 @@ def _make_phase2(config: Config):
         )
     )
 
+
 def _source_files(pipeline, path: Path) -> List[Path]:
     """Return a sorted list of analyzable source files for `path`.
 
@@ -76,11 +77,7 @@ def _source_files(pipeline, path: Path) -> List[Path]:
 
 
 def _merge_phase2_reports(root: str, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Merge per-file Phase 2 reports into one directory-level report.
-
-    Each decision is preserved as-is (including its group_id and source
-    location). Aggregated counts are recomputed across all files.
-    """
+    """Merge per-file Phase 2 reports into one directory-level report."""
     decisions: List[Dict[str, Any]] = []
     errors: List[str] = []
     file_entries: List[Dict[str, Any]] = []
@@ -104,8 +101,10 @@ def _merge_phase2_reports(root: str, reports: List[Dict[str, Any]]) -> Dict[str,
 
     return {
         "source": root,
-        "language": "mixed" if len({e["language"] for e in file_entries}) > 1 else (
-            file_entries[0]["language"] if file_entries else "unknown"
+        "language": (
+            "mixed"
+            if len({e["language"] for e in file_entries}) > 1
+            else (file_entries[0]["language"] if file_entries else "unknown")
         ),
         "decisions": decisions,
         "errors": errors,
@@ -113,7 +112,6 @@ def _merge_phase2_reports(root: str, reports: List[Dict[str, Any]]) -> Dict[str,
             "file_count": len(file_entries),
             "files": file_entries,
             "decision_counts": counts,
-            "provider": "llm",
             "agent": "security",
             "method": "single_security_agent",
         },
@@ -151,18 +149,15 @@ def run_phase2(config: Config) -> dict[str, Any]:
     phase2_pipeline = _make_phase2(config)
 
     if source.is_file():
-        # Single-file fast path — identical to before.
         phase1 = phase1_pipeline.analyze_file(source)
         result = asyncio.run(phase2_pipeline.analyze_report(phase1))
         _write_json(result, scenario.output)
         return result
 
-    # Directory path — iterate over every analyzable file and merge.
+    # Directory branch: iterate every analyzable file and merge.
     files = _source_files(phase1_pipeline, source)
     if not files:
-        raise FileNotFoundError(
-            f"No analyzable source files under: {source}"
-        )
+        raise FileNotFoundError(f"No analyzable source files under: {source}")
 
     print(f"Phase 2: analyzing {len(files)} file(s) under {source}")
     per_file_reports: List[Dict[str, Any]] = []
@@ -226,7 +221,6 @@ def run_phase3(config: Config) -> dict[str, Any]:
     )
     result.metadata["reports"] = reports
     save_result(result, scenario.output)
-    print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False, default=str))
     print(f"Report written to {scenario.output}")
     return result.to_dict()
 
@@ -311,6 +305,7 @@ def run_full(config: Config) -> dict[str, Any]:
     result.metadata["reports"] = reports
     evaluation_output = scenario.evaluation_output or "results/phase3_result.json"
     save_result(result, evaluation_output)
+    print(f"Report written to {evaluation_output}")
 
     return {"phase1": phase1, "phase2": phase2, "phase3": result.to_dict()}
 

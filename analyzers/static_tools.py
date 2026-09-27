@@ -193,6 +193,39 @@ class CppcheckRunner(ToolRunner):
 class FlawfinderRunner(ToolRunner):
     tool_name = "flawfinder"
 
+    # Flawfinder rules that produce style-class noise on Juliet-sized code.
+    # These fire on any fixed-size array or benign helper call without
+    # evidence of an actual overflow, and overwhelm real findings.
+    _NOISE_RULES = {
+        # Declaration heuristics — fire on any sized array.
+        "char",
+        "wchar_t",
+        "TCHAR",
+        "LPCWSTR",
+        "LPCSTR",
+        "LPTSTR",
+        "LPSTR",
+        # Informational-only rules — no exploit path, no relevance.
+        "strlen",
+        "wcslen",
+        "atoi",
+        # Generic safe-API usage rules — the "safe" alternative is flagged.
+        "snprintf",
+        "vsnprintf",
+        "_snprintf",
+        "swprintf",
+        "strncpy",
+        "wcsncpy",
+        "strncat",
+        "wcsncat",
+        # Memory primitives that are flagged on nearly every call.
+        "memcpy",
+        "memmove",
+        "memset",
+        "MultiByteToWideChar",
+        "WideCharToMultiByte",
+    }
+
     def scan(self, path: Path) -> tuple[List[Finding], List[str]]:
         if not self.available("flawfinder"):
             return [], ["flawfinder is not installed or not on PATH"]
@@ -202,10 +235,14 @@ class FlawfinderRunner(ToolRunner):
         try:
             reader = csv.DictReader(io.StringIO(completed.stdout))
             for row in reader:
+                rule_name = (row.get("Name") or "").strip()
+                if rule_name in self._NOISE_RULES:
+                    continue
+
                 findings.append(
                     Finding(
                         tool=self.tool_name,
-                        rule_id=row.get("Name") or "unknown",
+                        rule_id=rule_name or "unknown",
                         message=row.get("Warning") or "",
                         file=row.get("File") or None,
                         line=self._int_or_none(row.get("Line")),
@@ -222,7 +259,10 @@ class FlawfinderRunner(ToolRunner):
             return [], [f"flawfinder CSV parsing failed: {exc}"]
 
         if completed.returncode not in (0, 1):
-            errors.append(f"flawfinder exited with {completed.returncode}: {completed.stderr.strip()}")
+            errors.append(
+                f"flawfinder exited with {completed.returncode}: "
+                f"{completed.stderr.strip()}"
+            )
         return findings, errors
 
     @staticmethod
