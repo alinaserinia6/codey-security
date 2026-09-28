@@ -1,6 +1,16 @@
 from __future__ import annotations
+
 import argparse
-from phase3.aggregate import load_results, summary_rows, write_csv
+import sys
+from pathlib import Path
+
+# The script lives in scripts/, so the repository root is not importable until
+# it is put on the path explicitly.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from phase3.aggregate import load_results, summary_rows, write_csv  # noqa: E402
 
 
 def main():

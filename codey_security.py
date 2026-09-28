@@ -44,6 +44,45 @@ def _scenario(config: Config, name: str) -> ScenarioConfig:
 
 
 def _make_phase2(config: Config):
+    """Build the Phase 2 pipeline selected by ``PHASE2_ARCHITECTURE``.
+
+    ``multi_agent`` is the proposed design, in which a Scanner proposes
+    hypotheses and a Verifier judges them against an evidence packet. The
+    single-agent pipeline is the same evidence with the two roles merged, so
+    setting the architecture is what isolates the contribution of the split.
+    """
+    architecture = config.phase2_architecture
+    if architecture == "multi_agent":
+        from phase2.client import build_pipeline
+        from phase2.multiagent import MultiAgentConfig
+
+        return build_pipeline(
+            config=MultiAgentConfig(
+                context_radius=config.phase2_context_radius,
+                # The single-agent budget was a count of groups to review; the
+                # multi-agent equivalent is the scanner's hypothesis budget,
+                # which bounds the LLM work in the same way.
+                max_hypotheses=config.phase2_max_groups,
+                concurrency=config.phase2_concurrency,
+                include_structural=config.phase2_include_structural,
+                include_taint=config.phase2_include_taint,
+                require_chain_evidence=config.phase2_require_chain_evidence,
+                reject_mitigated=config.phase2_reject_mitigated,
+                min_confidence=config.phase2_min_confidence,
+            ),
+            base_url=config.llm_base_url,
+            model_id=config.llm_model_id,
+            provider_id=config.llm_provider_id,
+            mode=config.llm_mode,
+            timeout=config.llm_timeout,
+            reuse_session=config.llm_reuse_session,
+        )
+    if architecture != "single_agent":
+        raise ValueError(
+            f"PHASE2_ARCHITECTURE must be 'multi_agent' or 'single_agent', "
+            f"not {architecture!r}"
+        )
+
     from phase2.pipeline import Phase2Config, Phase2Pipeline
 
     return Phase2Pipeline(

@@ -1,16 +1,40 @@
+"""Serialisation helpers for evaluation results."""
 from __future__ import annotations
+
 import json
 from pathlib import Path
-from typing import Iterable, List
-from .evaluator import evaluate
-from .models import EvaluationResult, Prediction
+from typing import Any, Dict, Iterable, List
+
+from .models import EvaluationResult
+
 
 def save_result(result: EvaluationResult, path: str | Path) -> None:
-    Path(path).write_text(json.dumps(result.to_dict(),indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
+    Path(path).write_text(
+        json.dumps(result.to_dict(), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
 
-def comparison_rows(results: Iterable[EvaluationResult]) -> List[dict]:
-    rows=[]
-    for r in results:
-        m=r.metrics
-        rows.append({"experiment":r.experiment,"TP":m.confusion.tp,"FP":m.confusion.fp,"FN":m.confusion.fn,"TN":m.confusion.tn,"Precision":m.precision,"Recall":m.recall,"F1":m.f1,"FPR":m.false_positive_rate,"Accuracy":m.accuracy})
+
+def comparison_rows(results: Iterable[EvaluationResult]) -> List[Dict[str, Any]]:
+    """Flatten results into one row of scalar metrics per experiment."""
+    rows: List[Dict[str, Any]] = []
+    for result in results:
+        metrics = result.metrics
+        sample_level = (result.metadata.get("sample_level") or {}) if result.metadata else {}
+        row: Dict[str, Any] = {
+            "experiment": result.experiment,
+            "TP": metrics.confusion.tp,
+            "FP": metrics.confusion.fp,
+            "FN": metrics.confusion.fn,
+            "TN": metrics.confusion.tn,
+            "precision": metrics.precision,
+            "recall": metrics.recall,
+            "f1": metrics.f1,
+            "fpr": metrics.false_positive_rate,
+            "accuracy": metrics.accuracy,
+        }
+        for key in ("benign_flag_rate", "vulnerable_detection_rate"):
+            if key in sample_level:
+                row[key] = sample_level[key]
+        rows.append(row)
     return rows

@@ -102,10 +102,18 @@ class Config:
     llm_reuse_session: bool = False
 
     # --- Phase 2 execution ---------------------------------------------
+    # "multi_agent" is the proposed architecture (Scanner proposes, Verifier
+    # judges). "single_agent" is kept so the contribution of the split can be
+    # ablated against the same evidence.
+    phase2_architecture: str = "multi_agent"
     phase2_max_groups: int = 50
     phase2_concurrency: int = 4
     phase2_context_radius: int = 8
     phase2_include_structural: bool = True
+    phase2_include_taint: bool = True
+    phase2_require_chain_evidence: bool = True
+    phase2_reject_mitigated: bool = False
+    phase2_min_confidence: float = 0.5
 
     # --- Phase 3 matching ----------------------------------------------
     phase3_line_tolerance: int = 5
@@ -160,10 +168,15 @@ def get_config() -> Config:
         llm_mode=_env_str("LLM_MODE", "build"),
         llm_timeout=_env_float("LLM_TIMEOUT", 300.0),
         llm_reuse_session=_env_bool("LLM_REUSE_SESSION", False),
+        phase2_architecture=_env_str("PHASE2_ARCHITECTURE", "multi_agent"),
         phase2_max_groups=max(1, _env_int("PHASE2_MAX_GROUPS", 50)),
         phase2_concurrency=max(1, _env_int("PHASE2_CONCURRENCY", 4)),
         phase2_context_radius=max(0, _env_int("PHASE2_CONTEXT_RADIUS", 8)),
         phase2_include_structural=_env_bool("PHASE2_INCLUDE_STRUCTURAL", True),
+        phase2_include_taint=_env_bool("PHASE2_INCLUDE_TAINT", True),
+        phase2_require_chain_evidence=_env_bool("PHASE2_REQUIRE_CHAIN_EVIDENCE", True),
+        phase2_reject_mitigated=_env_bool("PHASE2_REJECT_MITIGATED", False),
+        phase2_min_confidence=_env_float("PHASE2_MIN_CONFIDENCE", 0.5),
         phase3_line_tolerance=max(0, _env_int("PHASE3_LINE_TOLERANCE", 5)),
         scenarios=_make_scenarios(),
     )

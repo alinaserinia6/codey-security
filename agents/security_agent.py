@@ -140,7 +140,15 @@ class SecurityAgent:
         evidence_packet: Dict[str, Any],
         *,
         system_prompt: Optional[str] = None,
+        normalize: bool = True,
     ) -> Dict[str, Any]:
+        """Send one evidence packet and return the model's JSON object.
+
+        ``normalize`` maps the reply onto the Phase 1 single-agent decision
+        shape. The Scanner and Verifier roles have their own output contracts
+        (``hypotheses`` and ``chain_verified`` respectively), so they pass
+        ``normalize=False`` and parse the reply themselves.
+        """
         prompt = (
             (system_prompt or SECURITY_SYSTEM_PROMPT)
             + "\n\nEvidence packet (JSON):\n"
@@ -175,8 +183,10 @@ class SecurityAgent:
             except Exception:  # noqa: BLE001
                 pass
 
-        assessment = self._normalize(
-            self._parse_json(parts["text"]), evidence_packet
+        assessment = (
+            self._normalize(self._parse_json(parts["text"]), evidence_packet)
+            if normalize
+            else self._parse_json(parts["text"])
         )
         assessment["thinking"] = parts["thinking"]
         return assessment

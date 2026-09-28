@@ -8,11 +8,14 @@ completed development phases:
 
 1. **Phase 1 — Structural + Static Analysis**: parse source code with
    Tree-sitter and normalize findings from Bandit, Cppcheck, Flawfinder, and
-   Clang Static Analyzer.
-2. **Phase 2 — Evidence-Aware Security Verification**: a single Security Agent
-   (an LLM session) reviews each correlated Phase 1 finding together with
-   structural evidence and source context and returns
-   `CONFIRMED / REJECTED / UNCERTAIN`.
+   Clang Static Analyzer. A source-to-sink taint tracker runs over the same
+   structural index and recovers concrete dataflow chains.
+2. **Phase 2 — Multi-Agent Evidence-Aware Verification**: a **Scanner Agent**
+   reads the file and proposes candidate vulnerabilities, then a **Verifier
+   Agent** checks each candidate against the recovered source-to-sink chain and
+   rejects by default. Only the verifier's output can become a reported
+   finding, and its rejections are recorded. The original one-agent-per-group
+   path is kept as `--architecture single_agent` for the comparison.
 3. **Phase 3 — Benchmark + Evaluation**: compare predictions against ground
    truth and calculate Precision, Recall, F1, FPR, specificity, accuracy, and
    per-CWE results.
@@ -69,10 +72,19 @@ instead of only reporting qualitative examples.
                                  │
                             Phase 2 ▼
                      ┌────────────────────────┐
-                     │ Security Agent         │
-                     │ (OpenCode session API) │
+                     │ Scanner Agent          │
+                     │ whole file, proposes  │
+                     │ hypotheses             │
                      └────────────┬───────────┘
-                                 │
+                                  │ hypotheses
+                     ┌────────────▼───────────┐
+                     │ Verifier Agent         │
+                     │ one at a time, shown   │
+                     │ the source-to-sink     │
+                     │ chain; rejects by      │
+                     │ default                │
+                     └────────────┬───────────┘
+                                  │
                     CONFIRMED / REJECTED /
                            UNCERTAIN
                                  │
@@ -87,12 +99,23 @@ instead of only reporting qualitative examples.
                     └────────────────────────┘
 ```
 
-Phase 2 is intentionally a single agent. The research question is whether
-**evidence quality** (structural + static analysis) improves an LLM's ability
-to make a defensible finding-level judgement, not whether multiple LLMs can
-outvote each other. A future multi-agent variant (Context Agent, Adversarial
-Critic, Final Adjudicator) can be layered on top of the same Phase 1 evidence
-packet if that becomes a separate research direction.
+The two agents are given deliberately different jobs, and that separation is
+what makes the false-alarm reduction measurable: the scanner is tuned for
+recall and is expected to propose things that turn out to be wrong, and the
+verifier absorbs that over-generation instead of letting it reach the report.
+The verifier is not shown the scanner's reasoning, only the hypothesis, because
+showing it the argument for a claim tends to anchor the verdict on that claim.
+
+Two conditions the verifier must satisfy are enforced in code rather than left
+to the prompt, since a prompt instruction is only a request:
+
+- a reported injection class must have a real source-to-sink chain behind it
+  (`--allow-unproven-chains` ablates this), and
+- a confirmation below the confidence threshold is downgraded rather than
+  reported.
+
+Classes the taint engine does not model — a raw integer overflow, for instance —
+are exempt from the chain requirement, because there is no chain to check.
 
 ---
 
@@ -103,19 +126,28 @@ codey-security/
 ├── analyzers/                      # Phase 1 deterministic analysis
 │   ├── finding.py                  # canonical finding model + correlation
 │   ├── structural_analyzer.py      # Tree-sitter AST/structure extraction
+│   ├── taint.py                    # source-to-sink chain recovery
+│   ├── catalog.py                  # CWE/CVE reference data
 │   ├── static_tools.py             # Bandit/Cppcheck/Flawfinder/Clang adapters
 │   └── phase1_pipeline.py          # unified Phase 1 pipeline
 │
+├── data/
+│   └── cve_catalog.json            # hand-maintained, NVD-verified CVE mappings
+│
 ├── agents/                         # LLM agents
-│   └── security_agent.py           # single LLM Security Agent
+│   ├── security_agent.py           # shared LLM transport
+│   ├── scanner_agent.py            # Scanner role: proposes hypotheses
+│   └── verifier_agent.py           # Verifier role: confirms or rejects
 │
 ├── phase2/                         # Phase 2 orchestration
 │   ├── models.py
-│   ├── prompts.py                  # reference prompt text
+│   ├── prompts.py                  # Scanner and Verifier prompt text
 │   ├── context.py                  # sanitized source window for the agent
-│   ├── sanitize.py                 # removes Juliet label leaks
+│   ├── sanitize.py                 # removes dataset label leaks
+│   ├── multiagent.py               # Scanner -> Verifier orchestration
+│   ├── client.py                   # binds the role agents to the pipeline
 │   ├── llm.py
-│   └── pipeline.py
+│   └── pipeline.py                 # single-agent baseline, for comparison
 │
 ├── phase3/                         # Phase 3 benchmark/evaluation
 │   ├── models.py
@@ -233,13 +265,32 @@ are configured in `env_config.py` and `.env`. The CLI only selects a scenario.
 
 ```bash
 python codey_security.py phase1   # structural + static analysis of a file
-python codey_security.py phase2   # Phase 1 + Security Agent verification
+python codey_security.py phase2   # Phase 1 + Scanner/Verifier verification
 python codey_security.py phase3   # benchmark against a ground-truth dataset
 python codey_security.py full     # Phase 1 -> Phase 2 -> Phase 3
 ```
 
+The `codey_security` entry point honours `PHASE2_ARCHITECTURE`, which is
+`multi_agent` by default. The two pipelines consume the same Phase 1 report and
+the same evidence, so setting it to `single_agent` is what isolates the
+contribution of splitting the roles:
+
+```bash
+PHASE2_ARCHITECTURE=single_agent python codey_security.py full
+```
+
+For running Phase 2 over a directory of Phase 1 reports, with explicit
+arguments rather than `.env`, use the dedicated runner:
+
+```bash
+python scripts/run_phase2.py results/ --architecture multi_agent \
+  --out results/phase2_report.json
+python scripts/run_phase2.py results/phase1_report.json \
+  --architecture single_agent --out results/phase2_single.json
+```
+
 There are intentionally no `--provider`, `--out`, `--dataset` or `--mode`
-flags. See `README_CLI_CONFIG.md`.
+flags on the `codey_security` CLI. See `README_CLI_CONFIG.md`.
 
 ---
 
@@ -294,14 +345,19 @@ This format is the contract consumed by Phase 2.
 
 ## Phase 2 decision model
 
-Each correlated Phase 1 group is sent to a single **Security Agent**. The
-agent receives:
+Phase 2 is two agents with different jobs.
 
-- the normalized finding group (tools, CWEs, messages, fingerprints),
-- the structural metadata from Phase 1 (functions, calls, branches),
-- a configurable window of source lines around the finding.
+**Scanner Agent** — reads the whole file and returns a list of candidate
+vulnerabilities. It receives the source, the structural index (functions,
+parameters, dangerous calls, imports), the normalized static-tool findings, and
+the recovered dataflow chains, so it does not spend its whole budget
+rediscovering a path that is already known. It is not asked to prove anything.
+It returns a list of hypotheses, each with a CWE, a line, and a claim.
 
-The agent returns exactly one of:
+**Verifier Agent** — handles one hypothesis at a time and is the only agent
+whose output can become a report finding. It receives the hypothesis, a window
+of source around it, the chains near it, and the nearby static-tool findings.
+It returns exactly one of:
 
 - `CONFIRMED` — supplied evidence is sufficient to support the finding.
 - `REJECTED` — supplied evidence contradicts the finding or shows it benign.
@@ -309,8 +365,21 @@ The agent returns exactly one of:
 
 `UNCERTAIN` is intentional. The system should not invent certainty when the
 evidence is insufficient. Every response also carries a confidence score, a
-short technical rationale, explicit supporting evidence, and a list of missing
-evidence items so the decision can be audited.
+short technical explanation, explicit supporting evidence, a list of missing
+evidence items, and whether the source-to-sink chain was actually verified.
+
+A `CONFIRMED` verdict is only reported if it also survives the code-level
+evidence gate: the confidence threshold, the verifier's own
+`chain_verified` claim, and — for a class the taint engine models — the
+existence of a real source-to-sink chain in the file. Candidates that do not
+survive are written to `decisions` with the reason, so the report accounts for
+every hypothesis the scanner raised.
+
+Note that the taint engine is used by the multi-agent pipeline and by
+`scripts/eval_taint_evidence.py`, not by the single-agent pipeline that produced
+the A–D experiment results. Those two sets of numbers measure different things:
+A–D ask how well a model judges static findings, while `exp_E` asks how much
+signal the deterministic evidence engine carries on its own.
 
 Phase 2 is powered by an OpenCode session (`LLM_BASE_URL`, `LLM_MODEL_ID`,
 `LLM_PROVIDER_ID`). The model is recorded in every Phase 3 result under
@@ -416,8 +485,9 @@ record instead of silently dropping them.
 Compare the four:
 
 ```bash
-python aggregate_phase3.py results/exp_A_static.json results/exp_B_llm_only.json \
-  results/exp_C_static_llm.json results/exp_D_full.json --csv results/comparison.csv
+python scripts/aggregate_phase3.py results/exp_A_static.json \
+  results/exp_B_llm_only.json results/exp_C_static_llm.json \
+  results/exp_D_full.json --csv results/comparison.csv
 ```
 
 Each result file carries `metadata.provenance`: dataset, model, base URL,
@@ -471,11 +541,79 @@ For research runs:
   audited validation subset is still required before any published claim.
 - The example manifest (`datasets/manifest.example.json`) is only a smoke
   test; it is not a research benchmark.
-- Function-level data-flow/taint analysis is not yet implemented; the current
-  Tree-sitter layer is primarily structural.
-- Phase 2 is a single agent. Multi-agent verification (context agent,
-  adversarial critic, final adjudicator) is a documented future direction,
-  not part of the current research core.
+- The taint tracker is intra-procedural. It recovers assignment-level
+  propagation and C parameter/global origins, but not inter-procedural flows, so
+  a bug whose source and sink are in different functions is out of its reach.
+- On the Juliet subset the taint tracker's recall is low. Counting any
+  source-to-sink path it gives TP 26 / FP 33 over 600 samples (recall `0.087`,
+  benign flag rate `0.110`); counting only unmitigated paths, TP 7 / FP 7
+  (recall `0.023`, benign flag rate `0.023`). The subset is roughly half C and
+  half C++, and `results/exp_E_taint_evidence.json` reports the split. Low
+  recall is expected, because the CWE-122 and CWE-190 test cases are size- and
+  allocation-mismatches rather than data flows. This is a property of the
+  benchmark, not a defect to be tuned away, and it is why taint evidence is
+  used to verify injection findings rather than to detect overflow.
+- The evaluator records `per_language` and
+  `languages_without_evidence_support` for this reason. A language with no
+  taint pattern table produces no chains at all, which would otherwise be
+  indistinguishable from "found nothing" once folded into the totals: C++ was
+  silently scored as safe until `cpp` was mapped onto the C patterns.
+- The Python benchmark (`datasets/python_bench/`) is synthetic and was written
+  alongside the detector. It is a regression harness for the six studied
+  classes, not an independent evaluation set.
+- SARD and Big-Vul loaders exist (`scripts/make_manifest.py`) but no numbers
+  from them are reported. SARD's authoritative archives and the `benjio/bigvul`
+  repository now both return 404, and the third-party mirrors that do exist
+  cannot be checked against a source of record, so a precision or recall taken
+  from one would be measuring a corpus whose labels are unverified. That is not
+  worth a row in the results table.
+
+### Devign (independent evidence)
+
+The Devign corpus (27,318 labelled C functions from qemu and FFmpeg, from
+`epicosy/devign`) is the one independent corpus evaluated so far. It is real
+project code rather than template variants, so it does not share the Juliet
+benchmark's blind spot.
+
+| Set | Metric | TP | FP | FN | TN | Precision | Recall | Benign flag rate |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 27,258 functions | any source-to-sink path | 971 | 894 | 11454 | 13939 | 0.521 | 0.078 | 0.060 |
+| 27,258 functions | unmitigated path only | 861 | 783 | 11564 | 14050 | 0.524 | 0.069 | 0.053 |
+| stratified 600 | unmitigated path only | 17 | 21 | 283 | 279 | 0.447 | 0.057 | 0.070 |
+| stratified 600 | Flawfinder | 6 | 11 | 294 | 289 | 0.353 | 0.020 | 0.037 |
+| stratified 600 | union | 20 | 29 | 280 | 271 | 0.408 | 0.067 | 0.097 |
+
+Results are in `results/exp_G_devign_taint_full.json` and
+`results/exp_G_devign_taint_strat600.json`. The `dataset` field inside them
+records the transient path the run was made from; to reproduce, fetch
+`data/raw/dataset.json` from `epicosy/devign` and run:
+
+```bash
+python scripts/make_manifest.py devign --input <dataset.json> \
+  --out /tmp/devign/devign_manifest.json
+python scripts/eval_taint_evidence.py --dataset /tmp/devign/devign_manifest.json \
+  --out results/exp_G_devign_taint_full.json
+```
+
+Recall is low for a reason worth stating plainly: Devign's label means "this
+function was touched by a security fix", which covers far more than the narrow
+set of flows the taint engine models. The precision and benign flag rate are the
+meaningful figures here, and on equal footing the taint evidence carries about
+2.8x Flawfinder's recall at higher precision — while costing no model calls.
+
+Devign's functions also carry label-revealing comments (16 of 27,258 mention a
+CVE id or "exploit"). All 27,258 were run through `phase2.sanitize` and 0
+markers survived, so the corpus is usable for the LLM phases as well.
+- Phase 2 has been wired and tested end to end with a stub agent. Runs against
+  the live endpoint are in progress and are still erroring often enough that
+  the provider is the limiting factor on the LLM-based experiments.
+- The full Experiment B run timed out on 1,068 of its requests at 180s, and
+  failed to parse 6 more responses. A timed-out sample is scored as a
+  non-detection, so the B recall figure is a **lower bound** on what the model
+  would achieve on a healthy endpoint, and its precision is pessimistic in the
+  same way. This is a property of the run, not of the method, and is the reason
+  the deterministic evidence results above are the more trustworthy measurement.
+
 
 ---
 
@@ -491,7 +629,12 @@ For research runs:
 - [x] Clang Static Analyzer integration
 - [x] Normalized finding schema
 - [x] Deduplication and function-scope correlation
-- [x] Evidence-aware Security Agent over LLM
+- [x] Evidence-aware Security Agent over LLM (single-agent baseline)
+- [x] Source-to-sink taint chain recovery with sanitizer and mitigation rules
+- [x] Scanner Agent / Verifier Agent orchestration with a code-level evidence gate
+- [x] NVD-verified CWE/CVE catalogue feeding the report's reference fields
+- [x] Python benchmark across the six studied classes
+- [x] Head-to-head evaluation against Flawfinder and Bandit
 - [x] Ground-truth dataset schema
 - [x] Finding matcher with component-aware file matching
 - [x] Precision/Recall/F1/FPR evaluation
@@ -501,15 +644,17 @@ For research runs:
 - [x] Large-scale benchmark runner (dedicated Phase-1 pool, async LLM fan-out)
 - [x] Label-leak sanitization of every LLM-visible string
 - [x] Run provenance recording (model, tool versions, settings, elapsed time)
-- [x] Ablation switch for structural evidence (`PHASE2_INCLUDE_STRUCTURAL`)
+- [x] Ablation switches for structural, taint and tool evidence
+- [x] SARD / Devign / Big-Vul manifest loaders
+- [x] Devign measured on all 27,258 functions plus a Flawfinder comparison
 
 ### Next
 
-- [ ] Reproducible one-command A–D sweep (the commands are documented, not scripted)
-- [ ] Compile-commands-aware C/C++ analysis
-- [ ] Stronger data-flow/taint evidence
+- [ ] Inter-procedural taint propagation
+- [ ] Measure SARD or Big-Vul as well, if a source of record for their labels
+      can be found, so the independent evidence spans more than one corpus
+- [ ] Live multi-agent runs on both the C and Python benchmarks
 - [ ] Results visualization for thesis/paper
-- [ ] Optional multi-agent extension
 
 ---
 
