@@ -34,27 +34,48 @@ def load_results(paths: Iterable[str | Path]) -> List[dict]:
     return results
 
 
+def _row_name(r: dict) -> str:
+    """Prefer the human-readable run label over the raw pipeline mode.
+
+    ``experiment`` is set to the pipeline mode (``phase1``/``phase2``/...), so
+    comparing several runs of the same mode produces indistinguishable rows.
+    The provenance block carries the label used when the run was launched.
+    """
+    label = (r.get("metadata", {}).get("provenance", {}) or {}).get("label")
+    if not label:
+        label = (r.get("metadata", {}).get("provenance", {}) or {}).get(
+            "experiment"
+        )
+    if not label:
+        return r["experiment"]
+    return label if label == r["experiment"] else f"{label} ({r['experiment']})"
+
+
 def summary_rows(results: Iterable[dict]) -> List[dict]:
     rows = []
     for r in results:
         m = r["metrics"]
         c = m["confusion"]
-        rows.append(
-            {
-                "experiment": r["experiment"],
-                "TP": c["tp"],
-                "FP": c["fp"],
-                "FN": c["fn"],
-                "TN": c["tn"],
-                "precision": m["precision"],
-                "recall": m["recall"],
-                "f1": m["f1"],
-                "fpr": m["false_positive_rate"],
-                "specificity": m["specificity"],
-                "accuracy": m["accuracy"],
-                "balanced_accuracy": m["balanced_accuracy"],
-            }
-        )
+        sl = (r.get("metadata", {}) or {}).get("sample_level", {}) or {}
+        row = {
+            "experiment": _row_name(r),
+            "TP": c["tp"],
+            "FP": c["fp"],
+            "FN": c["fn"],
+            "TN": c["tn"],
+            "precision": m["precision"],
+            "recall": m["recall"],
+            "f1": m["f1"],
+            "fpr": m["false_positive_rate"],
+            "specificity": m["specificity"],
+            "accuracy": m["accuracy"],
+            "balanced_accuracy": m["balanced_accuracy"],
+        }
+        if "benign_flag_rate" in sl:
+            row["benign_flag_rate"] = sl["benign_flag_rate"]
+        if "vulnerable_detection_rate" in sl:
+            row["vulnerable_detection_rate"] = sl["vulnerable_detection_rate"]
+        rows.append(row)
     return rows
 
 

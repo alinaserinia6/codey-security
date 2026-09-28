@@ -5,9 +5,11 @@ Reads the LorenzH/juliet_test_suite_c_1_3 CSVs via pandas, writes each
 good/bad snippet to a real source file under datasets/juliet_hf/, and emits
 train/test manifests matching dataset_schema.json.
 
+We mostly need to check CWE-122 and CWE-190 based on my proposal
+
 Usage:
     python scripts/import_hf_juliet.py --split all
-    python scripts/import_hf_juliet.py --split train --cwe CWE-120
+    python scripts/import_hf_juliet.py --split train --cwe CWE-122 --cwe CWE-190
 """
 from __future__ import annotations
 
