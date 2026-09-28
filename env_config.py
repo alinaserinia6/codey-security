@@ -105,6 +105,7 @@ class Config:
     phase2_max_groups: int = 50
     phase2_concurrency: int = 4
     phase2_context_radius: int = 8
+    phase2_include_structural: bool = True
 
     # --- Phase 3 matching ----------------------------------------------
     phase3_line_tolerance: int = 5
@@ -146,9 +147,15 @@ def _make_scenarios() -> dict[str, ScenarioConfig]:
 
 
 def get_config() -> Config:
+    # `LLM_MODEL_ID` is the canonical name; `LLM_MODEL` is the historical one
+    # used by the README and most local .env files, so it is accepted as a
+    # fallback instead of being silently ignored.
+    model_id = _env_str("LLM_MODEL_ID", "") or _env_str(
+        "LLM_MODEL", "opencode/deepseek-v4-flash-free"
+    )
     return Config(
         llm_base_url=_env_str("LLM_BASE_URL", "http://127.0.0.1:4096").rstrip("/"),
-        llm_model_id=_env_str("LLM_MODEL_ID", "opencode/deepseek-v4-flash-free"),
+        llm_model_id=model_id,
         llm_provider_id=_env_str("LLM_PROVIDER_ID", "opencode"),
         llm_mode=_env_str("LLM_MODE", "build"),
         llm_timeout=_env_float("LLM_TIMEOUT", 300.0),
@@ -156,6 +163,7 @@ def get_config() -> Config:
         phase2_max_groups=max(1, _env_int("PHASE2_MAX_GROUPS", 50)),
         phase2_concurrency=max(1, _env_int("PHASE2_CONCURRENCY", 4)),
         phase2_context_radius=max(0, _env_int("PHASE2_CONTEXT_RADIUS", 8)),
+        phase2_include_structural=_env_bool("PHASE2_INCLUDE_STRUCTURAL", True),
         phase3_line_tolerance=max(0, _env_int("PHASE3_LINE_TOLERANCE", 5)),
         scenarios=_make_scenarios(),
     )

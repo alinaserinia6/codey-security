@@ -16,8 +16,9 @@ python codey_security.py full
 There are intentionally no `--provider`, `--out`, `--dataset`, `--mode`, or
 other runtime options.
 
-Phase 2 always uses the single DeepSeek Security Agent over the LLM
-API. The model is selected with `LLM_MODEL`.
+Phase 2 always uses the single Security Agent. The model is selected with
+`LLM_MODEL_ID` (`LLM_MODEL` is accepted as an alias) together with
+`LLM_PROVIDER_ID`, both resolved by `env_config.py`.
 
 ## Scenario references
 

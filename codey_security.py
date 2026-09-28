@@ -16,6 +16,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -55,6 +57,7 @@ def _make_phase2(config: Config):
             max_groups=config.phase2_max_groups,
             concurrency=config.phase2_concurrency,
             context_radius=config.phase2_context_radius,
+            include_structural=config.phase2_include_structural,
         )
     )
 
@@ -182,7 +185,31 @@ def run_phase2(config: Config) -> dict[str, Any]:
     return merged
 
 
+def _tool_versions() -> Dict[str, str]:
+    """Best-effort record of the deterministic analyzers used in a run."""
+    import subprocess
+
+    versions: Dict[str, str] = {}
+    for name, argv in (
+        ("cppcheck", ["cppcheck", "--version"]),
+        ("flawfinder", ["flawfinder", "--version"]),
+        ("clang", ["clang", "--version"]),
+        ("bandit", ["bandit", "--version"]),
+    ):
+        try:
+            out = subprocess.run(
+                argv, capture_output=True, text=True, timeout=30, check=False
+            )
+            first = (out.stdout or out.stderr or "").strip().splitlines()
+            versions[name] = first[0].strip() if first else "unknown"
+        except (OSError, subprocess.SubprocessError):
+            versions[name] = "unavailable"
+    return versions
+
+
 def run_phase3(config: Config) -> dict[str, Any]:
+    import time
+
     from analyzers.phase1_pipeline import Phase1Pipeline
     from phase3.dataset import GroundTruthDataset
     from phase3.evaluator import evaluate
@@ -199,6 +226,7 @@ def run_phase3(config: Config) -> dict[str, Any]:
     if scenario.mode not in {"phase1", "phase2"}:
         raise ValueError("SCENARIO_PHASE3_MODE must be 'phase1' or 'phase2'")
 
+    started = time.monotonic()
     dataset = GroundTruthDataset.from_json(str(dataset_path))
     phase1 = Phase1Pipeline()
 
@@ -220,6 +248,25 @@ def run_phase3(config: Config) -> dict[str, Any]:
         ),
     )
     result.metadata["reports"] = reports
+    result.metadata["provenance"] = {
+        "dataset": str(dataset_path),
+        "dataset_samples": len(dataset),
+        "mode": scenario.mode,
+        "label": os.getenv("SCENARIO_PHASE3_LABEL", scenario.mode),
+        "model": config.llm_model_id if scenario.mode == "phase2" else None,
+        "base_url": config.llm_base_url if scenario.mode == "phase2" else None,
+        "include_structural": (
+            config.phase2_include_structural if scenario.mode == "phase2" else None
+        ),
+        "phase2_concurrency": config.phase2_concurrency,
+        "phase2_max_groups": config.phase2_max_groups,
+        "line_tolerance": config.phase3_line_tolerance,
+        "require_cwe_match": scenario.require_cwe_match,
+        "elapsed_seconds": round(time.monotonic() - started, 2),
+        "tool_versions": _tool_versions(),
+        "python_version": sys.version.split()[0],
+        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
     save_result(result, scenario.output)
     print(f"Report written to {scenario.output}")
     return result.to_dict()

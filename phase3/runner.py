@@ -139,7 +139,7 @@ def run_phase1_benchmark(
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 benchmark — async fan-out with a global semaphore
+# Phase 2 benchmark — Phase 1 on a dedicated pool, then async LLM fan-out
 # ---------------------------------------------------------------------------
 async def _run_phase2_benchmark_async(
     dataset: GroundTruthDataset,
@@ -149,53 +149,92 @@ async def _run_phase2_benchmark_async(
     progress: bool = True,
     workers: Optional[int] = None,
 ) -> Tuple[List[Any], List[Dict[str, Any]]]:
+    """Run Phase 1 for every sample, then verify the findings with the agent.
+
+    Phase 1 (external analyzers) and Phase 2 (blocking LLM calls) both need
+    worker threads.  Sharing the event loop's default executor makes the LLM
+    calls starve the analyzers — or the other way round — so Phase 1 runs on
+    its own ThreadPoolExecutor and only the agent work is fanned out with
+    asyncio afterwards.
+    """
     samples = list(dataset)
     total = len(samples)
-    reporter = ProgressReporter(total, label="phase2") if progress else None
+    reporter = ProgressReporter(total, label="phase1+2") if progress else None
 
-    n_workers = workers or int(os.getenv("PHASE2_CONCURRENCY", "4"))
-    sem = asyncio.Semaphore(max(1, n_workers))
+    n_workers = workers or _default_workers()
+    loop = asyncio.get_running_loop()
+    pool = ThreadPoolExecutor(max_workers=n_workers)
 
-    reports_by_index: List[Optional[Dict[str, Any]]] = [None] * total
+    phase1_by_index: List[Optional[Dict[str, Any]]] = [None] * total
 
-    async def _process_one(i: int, sample):
+    def _analyze_one(index: int, sample):
         path = dataset.resolve_file(sample)
         if not path.exists():
             raise FileNotFoundError(path)
-        # Phase 1 is CPU-bound; run it in a thread so the loop keeps moving.
-        p1 = await asyncio.to_thread(phase1_pipeline.analyze_file, path)
-        async with sem:
-            p2 = await phase2_pipeline.analyze_report(p1)
-        reports_by_index[i] = {
-            "sample_id": sample.sample_id,
-            "phase1": p1,
-            "phase2": p2,
-        }
-        if reporter:
-            counts = p2.get("metadata", {}).get("decision_counts", {})
-            reporter.step(
-                sample.sample_id,
-                extra=(
-                    f"groups={p2.get('metadata', {}).get('input_group_count', 0)}  "
-                    f"C={counts.get('CONFIRMED', 0)} "
-                    f"R={counts.get('REJECTED', 0)} "
-                    f"U={counts.get('UNCERTAIN', 0)}"
-                ),
-            )
+        report = phase1_pipeline.analyze_file(path)
+        return index, report
 
-    await asyncio.gather(
-        *(_process_one(i, s) for i, s in enumerate(samples)),
-        return_exceptions=False,
-    )
+    try:
+        futures = [
+            loop.run_in_executor(pool, _analyze_one, i, sample)
+            for i, sample in enumerate(samples)
+        ]
+        for fut in asyncio.as_completed(futures):
+            index, report = await fut
+            phase1_by_index[index] = report
+            if reporter:
+                reporter.step(
+                    samples[index].sample_id,
+                    extra=f"findings={len(report.get('findings', []))}",
+                )
+    finally:
+        pool.shutdown(wait=True)
+
+    # --- Phase 2: verify the correlated findings with the Security Agent ---
+    llm_workers = int(os.getenv("PHASE2_CONCURRENCY", "4"))
+    sem = asyncio.Semaphore(max(1, llm_workers))
+    reporter2 = ProgressReporter(total, label="phase2") if progress else None
+    state = {"i": 0, "confirmed": 0, "rejected": 0, "uncertain": 0, "lock": asyncio.Lock()}
+
+    async def _verify_one(index: int, sample, report: Dict[str, Any]) -> Dict[str, Any]:
+        async with sem:
+            phase2 = await phase2_pipeline.analyze_report(report)
+        async with state["lock"]:
+            state["i"] += 1
+            counts = phase2.get("metadata", {}).get("decision_counts", {})
+            state["confirmed"] += counts.get("CONFIRMED", 0)
+            state["rejected"] += counts.get("REJECTED", 0)
+            state["uncertain"] += counts.get("UNCERTAIN", 0)
+            if reporter2:
+                reporter2.step(
+                    sample.sample_id,
+                    extra=(
+                        f"groups={phase2.get('metadata', {}).get('input_group_count', 0)}  "
+                        f"C={state['confirmed']} R={state['rejected']} U={state['uncertain']}"
+                    ),
+                )
+        return phase2
+
+    phase2_by_index: List[Optional[Dict[str, Any]]] = [None] * total
+    pending = [
+        _verify_one(i, samples[i], phase1_by_index[i])
+        for i in range(total)
+        if phase1_by_index[i] is not None
+    ]
+    if pending:
+        results = await asyncio.gather(*pending)
+        order = [i for i in range(total) if phase1_by_index[i] is not None]
+        for i, phase2 in zip(order, results):
+            phase2_by_index[i] = phase2
 
     predictions: List[Any] = []
     reports: List[Dict[str, Any]] = []
     for i, sample in enumerate(samples):
-        rep = reports_by_index[i]
-        if rep is None:
+        p1, p2 = phase1_by_index[i], phase2_by_index[i]
+        if p1 is None or p2 is None:
             continue
-        reports.append(rep)
-        predictions.extend(predictions_from_phase2(rep["phase2"], sample.sample_id))
+        reports.append({"sample_id": sample.sample_id, "phase1": p1, "phase2": p2})
+        predictions.extend(predictions_from_phase2(p2, sample.sample_id))
 
     return predictions, reports
 

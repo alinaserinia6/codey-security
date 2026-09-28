@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 from .context import load_source_context
 from .llm import Phase2LLM
 from .models import AgentAssessment, FinalDecision, Phase2Report
+from .sanitize import sanitize_value
 
 
 @dataclass
@@ -26,6 +27,11 @@ class Phase2Config:
     context_radius: int = 8
     max_groups: int = 50
     concurrency: int = 4
+
+    # Ablation switch: when False the evidence packet carries no structural
+    # (Tree-sitter) evidence, which turns the run into "static + LLM" instead
+    # of the full "static + structural + LLM" configuration.
+    include_structural: bool = True
 
 
 class Phase2Pipeline:
@@ -95,11 +101,17 @@ class Phase2Pipeline:
                 "members": self._members_for_group(
                     group, report.get("findings", [])
                 ),
-                "structural": report.get("metadata", {}).get("structure", {}),
                 "source_context": load_source_context(
                     source, line, self.cfg.context_radius
                 ),
             }
+            if self.cfg.include_structural:
+                packet["structural"] = report.get("metadata", {}).get(
+                    "structure", {}
+                )
+            # Neutralise Juliet scenario identifiers in every textual field so
+            # the agent cannot read the label out of the evidence packet.
+            packet = sanitize_value(packet)
 
             try:
                 value = await self.llm.ask_json(

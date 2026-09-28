@@ -80,6 +80,7 @@ class SecurityAgent:
         self.model_id = (
             model_id
             or os.getenv("LLM_MODEL_ID")
+            or os.getenv("LLM_MODEL")
             or "opencode/deepseek-v4-flash-free"
         )
         self.provider_id = (
@@ -104,7 +105,7 @@ class SecurityAgent:
             in {"1", "true", "yes", "on"}
         )
 
-        self.client = Opencode(base_url=self.base_url)
+        self.client = Opencode(base_url=self.base_url, timeout=self.timeout)
         self._session_id: Optional[str] = None
         self._session_lock = asyncio.Lock()
 
@@ -134,9 +135,14 @@ class SecurityAgent:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    async def analyze(self, evidence_packet: Dict[str, Any]) -> Dict[str, Any]:
+    async def analyze(
+        self,
+        evidence_packet: Dict[str, Any],
+        *,
+        system_prompt: Optional[str] = None,
+    ) -> Dict[str, Any]:
         prompt = (
-            SECURITY_SYSTEM_PROMPT
+            (system_prompt or SECURITY_SYSTEM_PROMPT)
             + "\n\nEvidence packet (JSON):\n"
             + json.dumps(evidence_packet, ensure_ascii=False, indent=2, default=str)
             + "\n\nReturn ONLY the JSON object described above."

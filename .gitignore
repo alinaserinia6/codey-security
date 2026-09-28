@@ -10,6 +10,7 @@ htmlcov/
 .env
 .DS_Store
 results/*.json
+results/*.jsonl
 results/*.csv
 results/*.html
 *.log

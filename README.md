@@ -9,9 +9,9 @@ completed development phases:
 1. **Phase 1 — Structural + Static Analysis**: parse source code with
    Tree-sitter and normalize findings from Bandit, Cppcheck, Flawfinder, and
    Clang Static Analyzer.
-2. **Phase 2 — Evidence-Aware Security Verification**: a single DeepSeek
-   Security Agent (via LLM) reviews each correlated Phase 1 finding
-   together with structural evidence and source context and returns
+2. **Phase 2 — Evidence-Aware Security Verification**: a single Security Agent
+   (an LLM session) reviews each correlated Phase 1 finding together with
+   structural evidence and source context and returns
    `CONFIRMED / REJECTED / UNCERTAIN`.
 3. **Phase 3 — Benchmark + Evaluation**: compare predictions against ground
    truth and calculate Precision, Recall, F1, FPR, specificity, accuracy, and
@@ -67,12 +67,11 @@ instead of only reporting qualitative examples.
                     │ + correlation           │
                     └────────────┬───────────┘
                                  │
-                           Phase 2 ▼
-                    ┌────────────────────────┐
-                    │ Security Agent         │
-                    │ (DeepSeek over         │
-                    │  LLM API)       │
-                    └────────────┬───────────┘
+                            Phase 2 ▼
+                     ┌────────────────────────┐
+                     │ Security Agent         │
+                     │ (OpenCode session API) │
+                     └────────────┬───────────┘
                                  │
                     CONFIRMED / REJECTED /
                            UNCERTAIN
@@ -113,7 +112,8 @@ codey-security/
 ├── phase2/                         # Phase 2 orchestration
 │   ├── models.py
 │   ├── prompts.py                  # reference prompt text
-│   ├── context.py
+│   ├── context.py                  # sanitized source window for the agent
+│   ├── sanitize.py                 # removes Juliet label leaks
 │   ├── llm.py
 │   └── pipeline.py
 │
@@ -127,6 +127,15 @@ codey-security/
 │   ├── runner.py
 │   ├── report.py
 │   └── aggregate.py
+│
+├── scripts/                        # reproducible benchmark entry points
+│   ├── doctor.py                   # environment check
+│   ├── generate_juliet_manifest.py # Juliet 1.3 manifest generator
+│   ├── import_hf_juliet.py         # Hugging Face Juliet import
+│   ├── split_juliet_manifest.py    # group-aware train/test split
+│   ├── run_juliet_benchmark.py     # experiment A (static tools only)
+│   ├── run_llm_only_benchmark.py   # experiment B (LLM only)
+│   └── evaluate_llm_only.py        # score experiment B with the shared matcher
 │
 ├── examples/                       # small sanity-check samples
 ├── datasets/                       # benchmark manifests / Juliet integration
@@ -187,16 +196,33 @@ pip install -r requirements.txt
 
 ### 3. LLM
 
-Phase 2 uses the LLM API through the OpenAI-compatible Python client.
-Configure your key in `.env`:
+Phase 2 talks to a running **OpenCode server** through its session API — not
+to a raw OpenAI-compatible endpoint. Start one and point the pipeline at it:
 
 ```bash
-cp .env.example .env
-# then edit .env and set LLM_API_KEY
+opencode serve --port 4096 --hostname 127.0.0.1
+cp .env.example .env   # then set LLM_BASE_URL, LLM_MODEL_ID, LLM_PROVIDER_ID
 ```
 
-`LLM_API_KEY` is only required when running Phase 2. Phase 1 and
-Phase-1-only Phase 3 runs do not need it.
+| Variable | Meaning | Default |
+|---|---|---|
+| `LLM_BASE_URL` | OpenCode server URL | `http://127.0.0.1:4096` |
+| `LLM_MODEL_ID` | model id understood by that server | `opencode/deepseek-v4-flash-free` |
+| `LLM_PROVIDER_ID` | provider id on that server | `opencode` |
+| `LLM_MODE` | agent mode | `build` |
+| `LLM_TIMEOUT` | per-request timeout (seconds) | `300` |
+| `LLM_REUSE_SESSION` | reuse one session across findings | `false` |
+
+`LLM_MODEL` is accepted as an alias for `LLM_MODEL_ID` because that is the
+name used in older `.env` files.
+
+The model id must exist on the configured provider — check it with
+`curl -s $LLM_BASE_URL/provider`. Phase 1 and Phase-1-only Phase 3 runs never
+contact the server.
+
+> If the server sits behind an HTTP proxy, the provider host must be
+> reachable through it (or listed in `no_proxy`); otherwise every Phase 2
+> call fails after the timeout with `Cannot connect to API`.
 
 ---
 
@@ -286,9 +312,16 @@ evidence is insufficient. Every response also carries a confidence score, a
 short technical rationale, explicit supporting evidence, and a list of missing
 evidence items so the decision can be audited.
 
-Phase 2 is powered by DeepSeek over the LLM API. The model is
-configurable through `LLM_MODEL` and defaults to
-`deepseek/deepseek-v4-flash-0731:free`.
+Phase 2 is powered by an OpenCode session (`LLM_BASE_URL`, `LLM_MODEL_ID`,
+`LLM_PROVIDER_ID`). The model is recorded in every Phase 3 result under
+`metadata.provenance`.
+
+Before any text reaches the model, `phase2/sanitize.py` removes label leaks
+from the evidence packet: Juliet comments (`CWE: 190`, `POTENTIAL FLAW`) are
+blanked in place so line numbers stay valid, and scenario identifiers such as
+`CWE190_Integer_Overflow__int_45_bad`, `badSink` and `goodG2B` are rewritten
+to stable `sym_<hash>` aliases. Without this, an LLM-only baseline would read
+the ground-truth label straight out of the file.
 
 ---
 
@@ -344,6 +377,53 @@ For each experiment report:
 
 Use the same benchmark split for every experiment.
 
+### Running them
+
+Every command reads its settings from `.env` / the environment, so override
+only what differs per experiment. Use one dataset for all four runs.
+
+```bash
+# A — static tools only (no LLM)
+SCENARIO_PHASE3_MODE=phase1 SCENARIO_PHASE3_DATASET=datasets/juliet_test.json \
+SCENARIO_PHASE3_OUTPUT=results/exp_A_static.json \
+python codey_security.py phase3
+
+# B — LLM only: one full source file, no static evidence
+python scripts/run_llm_only_benchmark.py \
+  --dataset datasets/juliet_test.json --out results/exp_B_llm_only.jsonl \
+  --concurrency 8 --resume
+python scripts/evaluate_llm_only.py \
+  --dataset datasets/juliet_test.json --predictions results/exp_B_llm_only.jsonl \
+  --out results/exp_B_llm_only.json
+
+# C — static findings + LLM, no structural evidence (ablation)
+PHASE2_INCLUDE_STRUCTURAL=false SCENARIO_PHASE3_MODE=phase2 \
+SCENARIO_PHASE3_DATASET=datasets/juliet_test.json \
+SCENARIO_PHASE3_LABEL=static_llm SCENARIO_PHASE3_OUTPUT=results/exp_C_static_llm.json \
+python codey_security.py phase3
+
+# D — static + structural evidence + LLM (proposed system)
+PHASE2_INCLUDE_STRUCTURAL=true SCENARIO_PHASE3_MODE=phase2 \
+SCENARIO_PHASE3_DATASET=datasets/juliet_test.json \
+SCENARIO_PHASE3_LABEL=static_structural_llm SCENARIO_PHASE3_OUTPUT=results/exp_D_full.json \
+python codey_security.py phase3
+```
+
+Experiment B appends one JSON line per sample as it finishes, so `--resume`
+after an interruption; `evaluate_llm_only.py` reports samples that never got a
+record instead of silently dropping them.
+
+Compare the four:
+
+```bash
+python aggregate_phase3.py results/exp_A_static.json results/exp_B_llm_only.json \
+  results/exp_C_static_llm.json results/exp_D_full.json --csv results/comparison.csv
+```
+
+Each result file carries `metadata.provenance`: dataset, model, base URL,
+structural-evidence switch, line tolerance, tool versions, elapsed time and
+the finish timestamp.
+
 ---
 
 ## Juliet integration plan
@@ -387,9 +467,10 @@ For research runs:
 ## Current limitations
 
 - Phase 1 standalone Clang analysis is not yet build-system aware.
-- The Phase 3 example dataset is only a smoke test; it is not a research
-  benchmark.
-- Juliet ground-truth generation is the next major experiment-specific task.
+- Juliet labels are derived from the `bad`/`good` naming convention; a manually
+  audited validation subset is still required before any published claim.
+- The example manifest (`datasets/manifest.example.json`) is only a smoke
+  test; it is not a research benchmark.
 - Function-level data-flow/taint analysis is not yet implemented; the current
   Tree-sitter layer is primarily structural.
 - Phase 2 is a single agent. Multi-agent verification (context agent,
@@ -416,12 +497,15 @@ For research runs:
 - [x] Precision/Recall/F1/FPR evaluation
 - [x] Per-CWE reporting
 - [x] Multi-experiment aggregation
+- [x] Juliet 1.3 manifest generator + group-aware train/test split
+- [x] Large-scale benchmark runner (dedicated Phase-1 pool, async LLM fan-out)
+- [x] Label-leak sanitization of every LLM-visible string
+- [x] Run provenance recording (model, tool versions, settings, elapsed time)
+- [x] Ablation switch for structural evidence (`PHASE2_INCLUDE_STRUCTURAL`)
 
 ### Next
 
-- [ ] Juliet 1.3 manifest generator
-- [ ] Large-scale benchmark runner
-- [ ] Ablation runner with fixed seeds/settings
+- [ ] Reproducible one-command A–D sweep (the commands are documented, not scripted)
 - [ ] Compile-commands-aware C/C++ analysis
 - [ ] Stronger data-flow/taint evidence
 - [ ] Results visualization for thesis/paper

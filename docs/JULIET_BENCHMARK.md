@@ -12,6 +12,21 @@ The importer uses Juliet's `bad`/`good` filename convention to construct sample-
 
 Juliet contains related variants of the same scenario. The importer creates `group_id` values so train/test splitting can keep related variants together.
 
+Juliet also prints its label inside the source. `phase2/sanitize.py` removes
+that before any text is shown to the model:
+
+- comments are blanked in place with `phase2/sanitize.py:strip_comments`, so
+  `CWE: 190`, `POTENTIAL FLAW` and `good variant` disappear while byte offsets
+  and line numbers stay identical to the file the tools reported;
+- leaking identifiers (`CWE190_Integer_Overflow__int_..._45_bad`, `badSink`,
+  `goodG2B`, `OMITBAD`) are rewritten to stable `sym_<sha1[:6]>` aliases, so
+  the same name is rewritten the same way in the snippet, the structural
+  evidence and the tool messages;
+- `CWE-190`-style references are never rewritten — the matcher needs them.
+
+`tests/test_sanitize.py` guards this. If sanitization regresses, every
+LLM-based experiment silently becomes a label-leak rather than a measurement.
+
 ## Matching
 
 Phase 3 matches positive findings primarily by source file, then uses CWE overlap and line proximity. The initial benchmark should keep line tolerance fixed before looking at final test metrics.
