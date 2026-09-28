@@ -91,16 +91,16 @@
       ])),
 
       node((2, 2), rect(width: 110pt, height: 46pt, [
-        همبسته‌سازی و
+        شواهد قطعی
         \
-        ادغام یافته‌های تکراری
+        ساختار، داده و یافته‌ها
         #v(8%)
       ])),
 
       node((4, 2), rect(width: 110pt, height: 46pt, [
-        بازبینی هر گروه
+        داوری چندعامله
         \
-        توسط عامل زبانی
+        جستجوگر و ارزیاب
         #v(8%)
       ])),
 
@@ -138,7 +138,7 @@
     fill: black.lighten(35%),
     [
       #v(1.5%)
-      شکل ۱.۳: نمای کلی سامانهٔ پیشنهادی و جایگاه بازبینی توسط عامل زبانی
+      شکل ۱.۳: نمای کلی سامانهٔ پیشنهادی و جایگاه داوری چندعامله مبتنی بر شواهد
     ],
   )
   #v(1%)
@@ -154,28 +154,28 @@
       node((0, 0), rect(width: 105pt, height: 60pt, [
         فایل‌های
         \
-        C و ++C
+        #text(size: 9pt)[پایتون، C و ++C]
         #v(10%)
       ])),
 
       node((2, 0), rect(width: 105pt, height: 60pt, [
         فاز یک
         \
-        #text(size: 9pt)[اجرای موازی سه ابزار ایستا]
+        #text(size: 9pt)[شواهد قطعی و همبسته‌سازی]
         #v(10%)
       ])),
 
       node((4, 0), rect(width: 105pt, height: 60pt, [
         فاز دو
         \
-        #text(size: 9pt)[ادغام، نرمال‌سازی و همبسته‌سازی]
+        #text(size: 9pt)[جستجوگر و ارزیاب]
         #v(10%)
       ])),
 
       node((6, 0), rect(width: 105pt, height: 60pt, [
         فاز سه
         \
-        #text(size: 9pt)[بازبینی مبتنی بر شواهد]
+        #text(size: 9pt)[ارزیابی مستقل]
         #v(10%)
       ])),
 
@@ -194,9 +194,9 @@
       ])),
 
       node((0, 2), rect(width: 105pt, height: 60pt, [
-        پایگاه دادهٔ
+        مجموعه‌های ارزیابی
         \
-        #text(size: 9pt)[جولیت]
+        #text(size: 9pt)[جولیت، پایتون و دیویگن]
         #v(10%)
       ])),
 
@@ -233,27 +233,28 @@
       ```json
 
       {
-        "language": "cpp",
-        "group": {
-          "id": "G-3",
-          "line": 33,
-          "severity": "HIGH",
-          "cwe": ["CWE-122"],
-          "tools": ["cppcheck", "clang"]
-        },
-        "members": [
-          { "tool": "cppcheck", "message": "buffer overflow" },
-          { "tool": "clang", "message": "out of bound array access" }
-        ],
+        "role": "scanner",
+        "language": "python",
+        "file": "example.py",
         "source_context": {
-          "start_line": 27,
-          "end_line": 39,
-          "snippet": "    27:     twoIntsStruct * data;\n ..."
+          "start_line": 4,
+          "end_line": 12,
+          "snippet": "    6: name = sys.argv[1]\n ..."
         },
+        "static_tool_findings": [
+          { "tool": "bandit", "message": "possible shell injection" }
+        ],
         "structural": {
-          "functions": [ { "name": "sym_1902e3", "line": 25 } ],
-          "calls": [ { "callee": "action", "line": 33 } ]
-        }
+          "functions": [ { "name": "run_user_command", "line": 4 } ],
+          "calls": [ { "callee": "subprocess.call", "line": 6 } ]
+        },
+        "dataflow_chains": [
+          {
+            "source": "sys.argv[1]",
+            "sink": "subprocess.call(command, shell=True)",
+            "mitigated": false
+          }
+        ]
       }
 
       ```
@@ -265,7 +266,7 @@
     fill: black.lighten(35%),
     [
       #v(0.5%)
-      شکل ۳.۲: ساختار بستهٔ شواهد ارسال‌شده به عامل زبانی
+      شکل ۳.۲: نمونهٔ ساده‌شدهٔ بستهٔ شواهد جستجوگر
     ],
   )
   #v(1%)

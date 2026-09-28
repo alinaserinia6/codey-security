@@ -145,7 +145,7 @@ class VulnerabilityCatalog:
         references: List[str] = []
         for cve_id in entry.cves:
             cve = self._cves.get(cve_id)
-            if cve is None:
+            if cve is None or not cve.in_scope:
                 continue
             cve_ids.append(cve.cve_id)
             if cve.reference and cve.reference not in references:
@@ -212,6 +212,12 @@ class VulnerabilityCatalog:
                 problems.append(
                     f"{cve_id}: marked out of scope without saying why"
                 )
+            if not cve.in_scope:
+                for class_id, class_entry in self._cwes.items():
+                    if cve_id in class_entry.cves:
+                        problems.append(
+                            f"{cve_id}: marked out of scope but listed under {class_id}"
+                        )
         return problems
 
     def classes_for_language(self, language: str) -> List[CweEntry]:

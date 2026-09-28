@@ -166,3 +166,54 @@ def test_manifest_still_carries_the_flat_metrics(evaluator, tmp_path: Path):
     assert "any_source_to_sink_path" in result["metrics"]
     assert "source_to_sink_path_without_mitigation" in result["metrics"]
     assert result["metrics"]["any_source_to_sink_path"]["tp"] == 1
+
+
+def test_failed_baseline_scan_is_not_scored_as_negative(
+    evaluator, tmp_path: Path, monkeypatch
+):
+    """An unavailable baseline is missing evidence, not a benign verdict."""
+    good = _write(tmp_path, "good.c", "int add(int a, int b) { return a + b; }\n")
+    bad = _write(
+        tmp_path,
+        "bad.c",
+        "void copy_in(char *in) { char buf[16]; strcpy(buf, in); }\n",
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "samples": [
+                    {
+                        "sample_id": "good",
+                        "file": str(good),
+                        "vulnerable": False,
+                    },
+                    {"sample_id": "bad", "file": str(bad), "vulnerable": True},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class FlakyRunner:
+        def scan(self, path):
+            if path.name == "bad.c":
+                return [], ["simulated baseline failure"]
+            return [], []
+
+    monkeypatch.setitem(evaluator._BASELINE_RUNNERS, "flawfinder", FlakyRunner)
+    result = evaluator.evaluate(manifest, None, baseline="flawfinder")
+
+    assert result["metrics"]["any_source_to_sink_path"]["tp"] == 1
+    assert result["baseline"]["metrics"] == {
+        "tp": 0,
+        "fp": 0,
+        "fn": 0,
+        "tn": 1,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0,
+        "benign_flag_rate": 0.0,
+    }
+    assert result["baseline"]["unavailable_samples"] == 1
+    assert result["baseline"]["tool_errors"] == ["bad.c: simulated baseline failure"]

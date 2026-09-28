@@ -30,6 +30,7 @@ from analyzers.taint import taint_chains_for, taint_modelled
 from .context import load_source_context
 from .models import (
     AgentAssessment,
+    FinalDecision,
     Hypothesis,
     Phase2Report,
     ReportFinding,
@@ -412,8 +413,6 @@ class MultiAgentPipeline:
         The name predates the confirmed case, which is now also written here so
         the decision log covers every hypothesis the scanner proposed.
         """
-        from .models import FinalDecision
-
         note = reason or verification.explanation
         status = verification.decision
         if reason and status == "CONFIRMED":

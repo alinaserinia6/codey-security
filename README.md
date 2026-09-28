@@ -531,6 +531,9 @@ For research runs:
 6. Never tune the matcher on the test set.
 7. Keep benchmark splits fixed across experiments.
 8. Report failures and skipped samples rather than silently dropping them.
+9. In deterministic evidence runs, a failed Bandit or Flawfinder scan excludes
+   that sample from the baseline and union tallies and is reported as an
+   unavailable baseline sample; it is not scored as a negative.
 
 ---
 

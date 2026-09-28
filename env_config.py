@@ -85,7 +85,7 @@ class ScenarioConfig:
 
 @dataclass(frozen=True)
 class Config:
-    """Runtime settings for the single-agent pipeline.
+    """Runtime settings for the Phase 2 pipelines.
 
     LLM settings are provider-neutral. They describe *where* to reach an
     OpenAI-style / agent-style inference server and *how* to call it. The

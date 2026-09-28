@@ -57,7 +57,9 @@
         "python"
       ],
       "summary": "A native object-construction primitive is applied to untrusted bytes, and constructing the object is enough to run attacker code.",
-      "cves": []
+      "cves": [
+        "CVE-2017-18342"
+      ]
     },
     {
       "cwe_id": "CWE-122",
@@ -205,7 +207,7 @@
       "related_cwes": [
         "CWE-193"
       ],
-      "weakness_source": "NVD CWE-122; CISA ADP CWE-193"
+      "weakness_source": "Red Hat CWE-122; NVD primary weakness CWE-193 and CISA ADP CWE-193 for the off-by-one root cause"
     },
     {
       "cve_id": "CVE-2017-7529",
@@ -267,7 +269,27 @@
         "CWE-74",
         "CWE-77"
       ],
-      "weakness_source": "Snyk CWE-94; GitHub Advisory CWE-74; Red Hat CWE-77"
+      "weakness_source": "GitHub Advisory GHSA-8vj2-vxx3-667w CWE-74; Snyk CWE-94; Red Hat CWE-77; NVD records NVD-CWE-noinfo. The report files it under the subclass established by arbitrary expression execution."
+    },
+    {
+      "cve_id": "CVE-2017-18342",
+      "project": "PyYAML",
+      "language": "python",
+      "cwe": "CWE-502",
+      "title": "PyYAML before 5.1 allowed yaml.load to execute arbitrary code on untrusted input; yaml.load is deprecated and backwards compatibility is preserved through UnsafeLoader",
+      "sources": [
+        "request body",
+        "untrusted YAML document",
+        "configuration file"
+      ],
+      "sinks": [
+        "yaml.load",
+        "yaml.full_load",
+        "yaml.unsafe_load"
+      ],
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2017-18342",
+      "related_cwes": [],
+      "weakness_source": "NVD CWE-502"
     },
     {
       "cve_id": "CVE-2025-27516",
@@ -292,10 +314,10 @@
         "Environment"
       ],
       "reference": "https://nvd.nist.gov/vuln/detail/CVE-2025-27516",
-      "weakness_source": "IBM security bulletin CWE-1336; NVD CVSS 8.8"
+      "weakness_source": "GitHub Advisory provider-accepted weakness CWE-1336; NVD CVSS 8.8"
     }
   ],
   "notes": [
-    "CVE identifiers were checked against NVD rather than recalled. CVE-2021-3156 is a heap-based buffer overflow (CWE-122/CWE-193), not command injection; CVE-2021-25239 is a Trend Micro information-disclosure issue, not template injection, and is retained only as an out-of-scope record. CVE-2025-27516 is the CWE-1336 example."
+    "CVE identifiers were checked against NVD rather than recalled. CVE-2021-3156 is a heap-based buffer overflow (CWE-122/CWE-193), not command injection; Red Hat records CWE-122, while NVD's primary weakness is the CWE-193 off-by-one root cause. CVE-2021-25239 is a Trend Micro information-disclosure issue, not template injection, and is retained only as an out-of-scope record. CVE-2025-27516 is the CWE-1336 example. The proposal's PyYAML unsafe-deserialization example named CVE-2022-22817, but that identifier is Pillow expression injection; it is filed here under CWE-94, and CVE-2017-18342 is the NVD-verified PyYAML CWE-502 example."
   ]
 }

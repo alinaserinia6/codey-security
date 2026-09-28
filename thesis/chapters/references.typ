@@ -29,31 +29,31 @@
 
 \
 
-[۶] <ref:6> #h(2%) S. B. G. Ayewah, D. M. Ayewah, and W. E. Jones, "What do software developers know about security? A survey," in #text(dir: ltr, [Proc. IEEE Symp. Security and Privacy]), May 2018, pp. 754–769.
+[۶] <ref:6> #h(2%) B. Johnson, Y. Song, E. Murphy-Hill, and R. Bowdidge, "Why don't software developers use static analysis tools to find bugs?," in #text(dir: ltr, [Proc. 35th Int. Conf. Software Engineering (ICSE)]), 2013, pp. 672–681.
 
 \
 
-[۷] <ref:7> #h(2%) M. Arnold, S. Crnogorac, and O. Vitek, "A study of false negatives in compiler and static analysis tools," in #text(dir: ltr, [Proc. ACM SIGPLAN Conf. Companion on Object-Oriented Programming, Systems, Languages, and Applications]), 2014.
+[۷] <ref:7> #h(2%) N. Ayewah and W. Pugh, "The Google FindBugs fixit," in #text(dir: ltr, [Proc. 19th Int. Symp. Software Testing and Analysis (ISSTA)]), 2010.
 
 \
 
-[۸] <ref:8> #h(2%) R. Love, R. Lam, S. Habra, and M. Zyp, "An empirical study of false negatives in C/C++ static analyzers," in #text(dir: ltr, [Proc. Int. Workshop on Programming Languages in Engineering]), 2014, pp. 76–86.
+[۸] <ref:8> #h(2%) D. Evans and D. Larochelle, "Improving security using extensible lightweight static analysis," in #text(dir: ltr, [IEEE Software]), vol. 19, no. 1, 2002, pp. 42–51.
 
 \
 
-[۹] <ref:9> #h(2%) M. Sridharan, S. Das, I. Cen, L. Wang, and D. Black, "Summit: Scaling deep learning for vulnerability detection," in #text(dir: ltr, [Proc. ACM SIGSAC Conf. Computer and Communications Security]), 2020, art. no. 2151.
+[۹] <ref:9> #h(2%) Y. Zhou, S. Liu, J. Siow, X. Du, and Y. Liu, "Devign: Effective vulnerability identification by learning comprehensive program semantics via graph neural networks," in #text(dir: ltr, [Advances in Neural Information Processing Systems 32 (NeurIPS)]), 2019, pp. 10197–10207.
 
 \
 
-[۱۰] <ref:10> #h(2%) H. Pearce, B. Tan, S. Sastry, D. Drozhdzhina, and K. Pernice, "Asleep at the keyboard? Assessing the security of GitHub Copilot's code contributions," in #text(dir: ltr, [Proc. IEEE Symp. Security and Privacy]), 2022, pp. 1861–1871.
+[۱۰] <ref:10> #h(2%) H. Pearce, B. Ahmad, B. Tan, B. Dolan-Gavitt, and R. Karri, "Asleep at the keyboard? Assessing the security of GitHub Copilot's code contributions," in #text(dir: ltr, [Proc. IEEE Symp. Security and Privacy (SP)]), 2022, pp. 754–768.
 
 \
 
-[۱۱] <ref:11> #h(2%) A. Wang et al., "Large language models for software engineering: Survey and open problems," 2024. [Online]. Available: #link("https://arxiv.org/abs/2310.03533")
+[۱۱] <ref:11> #h(2%) A. Fan, B. Gokkaya, M. Harman, M. Lyubarskiy, S. Sengupta, S. Yoo, and J. Zhang, "Large language models for software engineering: Survey and open problems," in #text(dir: ltr, [Proc. IEEE/ACM Int. Conf. Software Engineering: Future of Software Engineering (ICSE-FoSE)]), 2023, pp. 31–53.
 
 \
 
-[۱۲] <ref:12> #h(2%) S. Yao et al., "Tree-sitter: An incremental parsing system," 2021. [Online]. Available: #link("https://tree-sitter.github.io/tree-sitter/")
+[۱۲] <ref:12> #h(2%) #text(dir: ltr, [Tree-sitter contributors]), "Tree-sitter documentation: an incremental parsing system for programming tools." [Online]. Available: #link("https://tree-sitter.github.io/tree-sitter/")
 
 \
 
@@ -65,10 +65,32 @@
 
 \
 
-[۱۵] <ref:15> #h(2%) N. Perry, M. Srivastava, D. Kumar, and D. Boneh, "Do users write more insecure code with AI assistants?," in #text(dir: ltr, [Proc. ACM Conf. Computer Communications Security]), 2023, art. no. 754.
+[۱۵] <ref:15> #h(2%) N. Perry, M. Srivastava, D. Kumar, and D. Boneh, "Do users write more insecure code with AI assistants?," in #text(dir: ltr, [Proc. ACM SIGSAC Conf. Computer and Communications Security (CCS)]), 2023, pp. 2785–2799.
 
 \
 
-[۱۶] <ref:16> #h(2%) B. Lippmann, "Analyzing the security of program code," in #text(dir: ltr, [Proc. ACM Int. Conf. Genetic and Evolutionary Computation]), 2011, pp. 655–660.
+[۱۶] <ref:16> #h(2%) National Institute of Standards and Technology, "CVE-2021-3156 Detail," National Vulnerability Database. [Online]. Available: #link("https://nvd.nist.gov/vuln/detail/CVE-2021-3156")
+
+\
+
+[۱۷] <ref:17> #h(2%) National Institute of Standards and Technology, "CVE-2017-7529 Detail," National Vulnerability Database. [Online]. Available: #link("https://nvd.nist.gov/vuln/detail/CVE-2017-7529")
+
+\
+
+[۱۸] <ref:18> #h(2%) National Institute of Standards and Technology, "CVE-2022-22817 Detail," National Vulnerability Database. [Online]. Available: #link("https://nvd.nist.gov/vuln/detail/CVE-2022-22817")
+
+\
+
+[۱۹] <ref:19> #h(2%) National Institute of Standards and Technology, "CVE-2025-27516 Detail," National Vulnerability Database. [Online]. Available: #link("https://nvd.nist.gov/vuln/detail/CVE-2025-27516")
+
+\
+
+[۲۰] <ref:20> #h(2%) National Institute of Standards and Technology, "CVE-2017-18342 Detail," National Vulnerability Database. [Online]. Available: #link("https://nvd.nist.gov/vuln/detail/CVE-2017-18342")
+
+\
+
+[۲۱] <ref:21> #h(2%) National Institute of Standards and Technology, "CVE-2021-25239 Detail," National Vulnerability Database. [Online]. Available: #link("https://nvd.nist.gov/vuln/detail/CVE-2021-25239")
+
+\
 
 \

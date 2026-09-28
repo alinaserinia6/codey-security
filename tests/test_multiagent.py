@@ -151,7 +151,6 @@ def test_confirmed_hypothesis_becomes_a_report_finding(tmp_path):
                 "cwe": ["CWE-78"],
                 "severity": "HIGH",
                 "explanation": "argv[1] is passed to a shell.",
-                "chain_verified": True,
                 "source_location": f"{path}:6",
             }
         ],

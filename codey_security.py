@@ -118,7 +118,39 @@ def _source_files(pipeline, path: Path) -> List[Path]:
     return sorted(files)
 
 
-def _merge_phase2_reports(root: str, reports: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _pipeline_method(architecture: str) -> str:
+    """The provenance label for a directory-level Phase 2 report."""
+    if architecture == "multi_agent":
+        return "scanner_then_verifier"
+    if architecture == "single_agent":
+        return "single_security_agent"
+    raise ValueError(
+        f"PHASE2_ARCHITECTURE must be 'multi_agent' or 'single_agent', "
+        f"not {architecture!r}"
+    )
+
+
+def _analyze_file_report(phase1_pipeline, phase2_pipeline, path: Path) -> Dict[str, Any]:
+    """Run Phase 1 and Phase 2 for one file, preserving pipeline failures."""
+    phase1 = phase1_pipeline.analyze_file(path)
+    try:
+        report = phase2_pipeline.analyze_report(phase1)
+        if asyncio.iscoroutine(report):
+            report = asyncio.run(report)
+        return report
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "source": str(path),
+            "language": phase1.get("language", "unknown"),
+            "decisions": [],
+            "errors": [f"{type(exc).__name__}: {exc}"],
+            "metadata": {"input_group_count": 0},
+        }
+
+
+def _merge_phase2_reports(
+    root: str, reports: List[Dict[str, Any]], *, method: str = "single_security_agent"
+) -> Dict[str, Any]:
     """Merge per-file Phase 2 reports into one directory-level report."""
     decisions: List[Dict[str, Any]] = []
     errors: List[str] = []
@@ -155,7 +187,7 @@ def _merge_phase2_reports(root: str, reports: List[Dict[str, Any]]) -> Dict[str,
             "files": file_entries,
             "decision_counts": counts,
             "agent": "security",
-            "method": "single_security_agent",
+            "method": method,
         },
     }
 
@@ -204,22 +236,15 @@ def run_phase2(config: Config) -> dict[str, Any]:
     print(f"Phase 2: analyzing {len(files)} file(s) under {source}")
     per_file_reports: List[Dict[str, Any]] = []
     for path in files:
-        phase1 = phase1_pipeline.analyze_file(path)
-        try:
-            report = asyncio.run(phase2_pipeline.analyze_report(phase1))
-            per_file_reports.append(report)
-        except Exception as exc:  # noqa: BLE001
-            per_file_reports.append(
-                {
-                    "source": str(path),
-                    "language": phase1.get("language", "unknown"),
-                    "decisions": [],
-                    "errors": [f"{type(exc).__name__}: {exc}"],
-                    "metadata": {"input_group_count": 0},
-                }
-            )
+        per_file_reports.append(
+            _analyze_file_report(phase1_pipeline, phase2_pipeline, path)
+        )
 
-    merged = _merge_phase2_reports(str(source), per_file_reports)
+    merged = _merge_phase2_reports(
+        str(source),
+        per_file_reports,
+        method=_pipeline_method(config.phase2_architecture),
+    )
     _write_json(merged, scenario.output)
     return merged
 
@@ -340,22 +365,14 @@ def run_full(config: Config) -> dict[str, Any]:
             raise FileNotFoundError(f"No analyzable source files under: {source}")
         per_file_reports: List[Dict[str, Any]] = []
         for path in files:
-            file_phase1 = phase1_pipeline.analyze_file(path)
-            try:
-                per_file_reports.append(
-                    asyncio.run(phase2_pipeline.analyze_report(file_phase1))
-                )
-            except Exception as exc:  # noqa: BLE001
-                per_file_reports.append(
-                    {
-                        "source": str(path),
-                        "language": file_phase1.get("language", "unknown"),
-                        "decisions": [],
-                        "errors": [f"{type(exc).__name__}: {exc}"],
-                        "metadata": {"input_group_count": 0},
-                    }
-                )
-        phase2 = _merge_phase2_reports(str(source), per_file_reports)
+            per_file_reports.append(
+                _analyze_file_report(phase1_pipeline, phase2_pipeline, path)
+            )
+        phase2 = _merge_phase2_reports(
+            str(source),
+            per_file_reports,
+            method=_pipeline_method(config.phase2_architecture),
+        )
     _write_json(phase2, scenario.phase2_output or "results/phase2_report.json")
 
     if not scenario.dataset:

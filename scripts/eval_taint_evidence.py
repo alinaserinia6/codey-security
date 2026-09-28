@@ -39,6 +39,10 @@ from analyzers.taint import (  # noqa: E402
 )
 
 BASELINES = ("bandit", "flawfinder")
+_BASELINE_RUNNERS = {
+    "bandit": BanditRunner,
+    "flawfinder": FlawfinderRunner,
+}
 
 
 def _load_samples(dataset: Path) -> List[Dict[str, Any]]:
@@ -77,18 +81,20 @@ def _rates(tp: int, fp: int, fn: int, tn: int) -> Dict[str, Any]:
 
 
 def _baseline_flag(
-    name: str, path: Path, runner: Any, cache: Dict[str, bool]
-) -> Tuple[bool, Optional[str]]:
-    """Run the language's standard tool once per file, caching the verdict."""
+    name: str, path: Path, runner: Any, cache: Dict[str, Optional[bool]]
+) -> Tuple[Optional[bool], Optional[str]]:
+    """Run the language's standard tool once per file, caching the verdict.
+
+    ``None`` means the tool did not produce a usable verdict. Callers must not
+    score that sample as negative for the baseline: an unavailable tool is a
+    missing measurement, not evidence that the file is benign.
+    """
     key = str(path)
     if key in cache:
         return cache[key], None
-    if name == "bandit":
-        findings, errors = runner.scan(path)
-    else:
-        findings, errors = runner.scan(path)
+    findings, errors = runner.scan(path)
     if errors:
-        return False, "; ".join(errors)
+        return None, "; ".join(errors)
     cache[key] = bool(findings)
     return cache[key], None
 
@@ -105,11 +111,7 @@ def evaluate(
         raise ValueError(f"baseline must be one of {BASELINES}")
 
     analyzer = StructuralAnalyzer()
-    runner: Any = None
-    if baseline == "bandit":
-        runner = BanditRunner()
-    elif baseline == "flawfinder":
-        runner = FlawfinderRunner()
+    runner: Any = _BASELINE_RUNNERS[baseline]() if baseline else None
 
     keys = ("tp", "fp", "fn", "tn")
     counts = {
@@ -124,7 +126,8 @@ def evaluate(
     mitigations: Counter = Counter()
     failures: List[str] = []
     tool_errors: List[str] = []
-    baseline_cache: Dict[str, bool] = {}
+    baseline_unavailable = 0
+    baseline_cache: Dict[str, Optional[bool]] = {}
 
     def tally(counter: Counter, predicted: bool, vulnerable: bool) -> None:
         if vulnerable and predicted:
@@ -185,10 +188,16 @@ def evaluate(
 
         if baseline and runner is not None:
             flagged, error = _baseline_flag(baseline, path, runner, baseline_cache)
-            if error and len(tool_errors) < 10:
-                tool_errors.append(f"{path.name}: {error}")
-            tally(counts[f"baseline_{baseline}"], flagged, vulnerable)
-            tally(counts["union"], unmitigated or flagged, vulnerable)
+            if flagged is None:
+                # A failed baseline scan is excluded from the baseline and
+                # union tallies, but it is counted here and its message is
+                # retained in tool_errors.
+                baseline_unavailable += 1
+                if len(tool_errors) < 10:
+                    tool_errors.append(f"{path.name}: {error}")
+            else:
+                tally(counts[f"baseline_{baseline}"], flagged, vulnerable)
+                tally(counts["union"], unmitigated or flagged, vulnerable)
 
     def block(name: str) -> Dict[str, Any]:
         counter = counts[name]
@@ -238,6 +247,7 @@ def evaluate(
             "tool": baseline,
             "metrics": block(f"baseline_{baseline}"),
             "tool_errors": tool_errors,
+            "unavailable_samples": baseline_unavailable,
         }
         result["metrics"]["union_with_baseline"] = block("union")
     return result
