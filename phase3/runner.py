@@ -67,9 +67,18 @@ def _default_workers() -> int:
             n = int(env)
             if n > 0:
                 return n
-        except ValueError:
+        except (TypeError, ValueError):
             pass
     return max(1, (os.cpu_count() or 2))
+
+
+def _llm_workers() -> int:
+    """Parse PHASE2_CONCURRENCY defensively; fall back to 4 on bad values."""
+    try:
+        n = int(os.getenv("PHASE2_CONCURRENCY", "4"))
+    except (TypeError, ValueError):
+        return 4
+    return n if n > 0 else 4
 
 
 # ---------------------------------------------------------------------------
@@ -106,16 +115,30 @@ def run_phase1_benchmark(
         jobs.append((i, sample, path))
 
     n_workers = workers or _default_workers()
+    if n_workers < 1:
+        n_workers = 1
 
     def _analyze_one(item: Tuple[int, Any, Any]):
         idx, sample, path = item
-        report = phase1_pipeline.analyze_file(path)
+        try:
+            report = phase1_pipeline.analyze_file(path)
+        except Exception as exc:  # noqa: BLE001 - one bad sample must not stop a benchmark
+            report = {
+                "source": str(path),
+                "language": "unknown",
+                "findings": [],
+                "errors": [f"{type(exc).__name__}: {exc}"],
+                "metadata": {"structure": {}, "analysis_failed": True},
+            }
         return idx, sample, report
 
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         futures = [pool.submit(_analyze_one, job) for job in jobs]
         for fut in as_completed(futures):
-            idx, sample, report = fut.result()
+            try:
+                idx, sample, report = fut.result()
+            except Exception as exc:  # noqa: BLE001 - defensive; _analyze_one already isolates
+                continue
             reports_by_index[idx] = {"sample_id": sample.sample_id, "report": report}
             if reporter:
                 reporter.step(
@@ -162,16 +185,42 @@ async def _run_phase2_benchmark_async(
     reporter = ProgressReporter(total, label="phase1+2") if progress else None
 
     n_workers = workers or _default_workers()
+    if n_workers < 1:
+        n_workers = 1
     loop = asyncio.get_running_loop()
     pool = ThreadPoolExecutor(max_workers=n_workers)
 
     phase1_by_index: List[Optional[Dict[str, Any]]] = [None] * total
 
     def _analyze_one(index: int, sample):
-        path = dataset.resolve_file(sample)
+        try:
+            path = dataset.resolve_file(sample)
+        except Exception as exc:  # noqa: BLE001
+            return index, {
+                "source": getattr(sample, "file", "<unknown>"),
+                "language": "unknown",
+                "findings": [],
+                "errors": [f"unresolvable sample path: {type(exc).__name__}: {exc}"],
+                "metadata": {"structure": {}, "analysis_failed": True},
+            }
         if not path.exists():
-            raise FileNotFoundError(path)
-        report = phase1_pipeline.analyze_file(path)
+            return index, {
+                "source": str(path),
+                "language": "unknown",
+                "findings": [],
+                "errors": [f"missing file: {path}"],
+                "metadata": {"structure": {}, "analysis_failed": True},
+            }
+        try:
+            report = phase1_pipeline.analyze_file(path)
+        except Exception as exc:  # noqa: BLE001 - one bad sample must not stop a benchmark
+            report = {
+                "source": str(path),
+                "language": "unknown",
+                "findings": [],
+                "errors": [f"{type(exc).__name__}: {exc}"],
+                "metadata": {"structure": {}, "analysis_failed": True},
+            }
         return index, report
 
     try:
@@ -180,7 +229,10 @@ async def _run_phase2_benchmark_async(
             for i, sample in enumerate(samples)
         ]
         for fut in asyncio.as_completed(futures):
-            index, report = await fut
+            try:
+                index, report = await fut
+            except Exception as exc:  # noqa: BLE001 - defensive; _analyze_one already isolates
+                continue
             phase1_by_index[index] = report
             if reporter:
                 reporter.step(
@@ -191,14 +243,23 @@ async def _run_phase2_benchmark_async(
         pool.shutdown(wait=True)
 
     # --- Phase 2: verify the correlated findings with the Security Agent ---
-    llm_workers = int(os.getenv("PHASE2_CONCURRENCY", "4"))
+    llm_workers = _llm_workers()
     sem = asyncio.Semaphore(max(1, llm_workers))
     reporter2 = ProgressReporter(total, label="phase2") if progress else None
     state = {"i": 0, "confirmed": 0, "rejected": 0, "uncertain": 0, "lock": asyncio.Lock()}
 
     async def _verify_one(index: int, sample, report: Dict[str, Any]) -> Dict[str, Any]:
         async with sem:
-            phase2 = await phase2_pipeline.analyze_report(report)
+            try:
+                phase2 = await phase2_pipeline.analyze_report(report)
+            except Exception as exc:  # noqa: BLE001 - one LLM failure must not stop a benchmark
+                phase2 = {
+                    "source": report.get("source", "<unknown>"),
+                    "language": report.get("language", "unknown"),
+                    "decisions": [],
+                    "errors": [f"{type(exc).__name__}: {exc}"],
+                    "metadata": {"input_group_count": 0, "analysis_failed": True},
+                }
         async with state["lock"]:
             state["i"] += 1
             counts = phase2.get("metadata", {}).get("decision_counts", {})
@@ -222,9 +283,17 @@ async def _run_phase2_benchmark_async(
         if phase1_by_index[i] is not None
     ]
     if pending:
-        results = await asyncio.gather(*pending)
+        results = await asyncio.gather(*pending, return_exceptions=True)
         order = [i for i in range(total) if phase1_by_index[i] is not None]
         for i, phase2 in zip(order, results):
+            if isinstance(phase2, BaseException):
+                phase2 = {
+                    "source": str(phase1_by_index[i].get("source", "<unknown>")),
+                    "language": str(phase1_by_index[i].get("language", "unknown")),
+                    "decisions": [],
+                    "errors": [f"{type(phase2).__name__}: {phase2}"],
+                    "metadata": {"input_group_count": 0, "analysis_failed": True},
+                }
             phase2_by_index[i] = phase2
 
     predictions: List[Any] = []

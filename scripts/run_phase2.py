@@ -43,18 +43,21 @@ def iter_reports(paths: Iterable[Path]) -> List[Dict[str, Any]]:
         if path.is_dir():
             files.extend(
                 sorted(
-                    p for p in path.iterdir()
-                    if p.suffix in (".json", ".jsonl")
+                    p for p in path.rglob("*")
+                    if p.is_file() and p.suffix in (".json", ".jsonl")
                 )
             )
         else:
             files.append(path)
 
     for path in files:
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            print(f"warning: {path} unreadable ({exc}), skipped", file=sys.stderr)
+            continue
         if path.suffix == ".jsonl":
-            for line_no, line in enumerate(
-                path.read_text(encoding="utf-8").splitlines(), 1
-            ):
+            for line_no, line in enumerate(raw_text.splitlines(), 1):
                 line = line.strip()
                 if not line:
                     continue
@@ -67,7 +70,7 @@ def iter_reports(paths: Iterable[Path]) -> List[Dict[str, Any]]:
                     )
         else:
             try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload = json.loads(raw_text)
             except json.JSONDecodeError as error:
                 print(f"warning: {path} is not valid JSON ({error})", file=sys.stderr)
                 continue
@@ -240,7 +243,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-taint", action="store_true")
     parser.add_argument("--no-structural", action="store_true")
     parser.add_argument("--no-tools", action="store_true")
-    return asyncio.run(run(parser.parse_args(argv)))
+    args = parser.parse_args(argv)
+    # Validate numeric knobs up front so a typo fails fast with a clear
+    # message instead of a cryptic Semaphore/asyncio error mid-run.
+    if args.limit is not None and args.limit < 0:
+        parser.error("--limit must be >= 0")
+    for name in ("context_radius", "max_hypotheses", "concurrency", "file_concurrency"):
+        if getattr(args, name) < 0 or (name != "context_radius" and getattr(args, name) == 0):
+            parser.error(f"--{name.replace('_', '-')} must be a positive integer")
+    if args.timeout is not None and not args.timeout > 0:
+        parser.error("--timeout must be > 0")
+    if not 0.0 <= args.min_confidence <= 1.0:
+        parser.error("--min-confidence must be in [0, 1]")
+    for path in args.inputs:
+        if not path.exists():
+            parser.error(f"input does not exist: {path}")
+    return asyncio.run(run(args))
 
 
 if __name__ == "__main__":

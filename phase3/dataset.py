@@ -21,28 +21,49 @@ class GroundTruthDataset:
     @classmethod
     def from_json(cls, path: str | Path) -> "GroundTruthDataset":
         path = Path(path).resolve()
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            raw = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise FileNotFoundError(f"dataset not readable: {path}: {exc}") from exc
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"dataset is not valid JSON: {path}: {exc}") from exc
         items = payload.get("samples", payload if isinstance(payload, list) else [])
         if not isinstance(items, list):
             raise ValueError("Ground-truth JSON must contain a 'samples' list")
 
-        samples: List[GroundTruth] = [
-            GroundTruth(
-                sample_id=str(item["sample_id"]),
-                file=str(item["file"]),
-                vulnerable=bool(item["vulnerable"]),
-                cwe=[str(x) for x in item.get("cwe", [])],
-                line=int(item["line"]) if item.get("line") is not None else None,
-                function=item.get("function"),
-                finding_id=item.get("finding_id"),
-                description=str(item.get("description", "")),
-                group_id=item.get("group_id"),
-                variant=item.get("variant"),
-                scenario=item.get("scenario"),
-                language=item.get("language"),
+        samples: List[GroundTruth] = []
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                raise ValueError(f"dataset sample #{index} must be an object, got {type(item).__name__}")
+            if "sample_id" not in item or "file" not in item:
+                raise ValueError(
+                    f"dataset sample #{index} is missing required keys "
+                    f"(need 'sample_id' and 'file', got {sorted(item.keys())})"
+                )
+            try:
+                line = int(item["line"]) if item.get("line") is not None else None
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"dataset sample {item.get('sample_id', index)!r} has a non-integer 'line': {item.get('line')!r}"
+                ) from exc
+            samples.append(
+                GroundTruth(
+                    sample_id=str(item["sample_id"]),
+                    file=str(item["file"]),
+                    vulnerable=bool(item.get("vulnerable", False)),
+                    cwe=[str(x) for x in item.get("cwe", [])],
+                    line=line,
+                    function=item.get("function"),
+                    finding_id=item.get("finding_id"),
+                    description=str(item.get("description", "")),
+                    group_id=item.get("group_id"),
+                    variant=item.get("variant"),
+                    scenario=item.get("scenario"),
+                    language=item.get("language"),
+                )
             )
-            for item in items
-        ]
 
         return cls(samples, root=cls._dataset_root(path, payload))
 

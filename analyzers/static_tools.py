@@ -23,15 +23,36 @@ class ToolRunner:
         return shutil.which(command) is not None
 
     def run(self, args: Sequence[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            list(args),
-            cwd=str(cwd) if cwd else None,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=self.timeout,
-            check=False,
-        )
+        try:
+            return subprocess.run(
+                list(args),
+                cwd=str(cwd) if cwd else None,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=self.timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # Synthesize a CompletedProcess so callers record an error
+            # instead of aborting the whole file/benchmark on one slow tool.
+            cmd = list(args)
+            stdout = exc.stdout.decode("utf-8", errors="replace") if isinstance(exc.stdout, bytes) else (exc.stdout or "")
+            stderr = (exc.stderr.decode("utf-8", errors="replace") if isinstance(exc.stderr, bytes) else (exc.stderr or ""))
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=124,
+                stdout=stdout,
+                stderr=f"{stderr}\ntool timed out after {self.timeout}s: {' '.join(cmd)}".strip(),
+            )
+        except OSError as exc:
+            cmd = list(args)
+            return subprocess.CompletedProcess(
+                args=cmd,
+                returncode=127,
+                stdout="",
+                stderr=f"failed to launch {' '.join(cmd)}: {exc}",
+            )
 
 
 class BanditRunner(ToolRunner):
@@ -42,13 +63,17 @@ class BanditRunner(ToolRunner):
     def scan(self, path: Path) -> tuple[List[Finding], List[str]]:
         if not self.available("bandit"):
             return [], ["bandit is not installed or not on PATH"]
-        completed = self.run(["bandit", "-q", "-f", "json", "-r", str(path)])
+        try:
+            completed = self.run(["bandit", "-q", "-f", "json", "-r", str(path)])
+        except Exception as exc:  # noqa: BLE001 - one tool must not stop a run
+            return [], [f"bandit failed to run: {type(exc).__name__}: {exc}"]
         findings: List[Finding] = []
         errors: List[str] = []
         try:
             payload = json.loads(completed.stdout or "{}")
         except json.JSONDecodeError:
-            return [], [f"bandit returned non-JSON output: {completed.stdout[-500:]}"]
+            out = completed.stdout or ""
+            return [], [f"bandit returned non-JSON output: {out[-500:]}"]
 
         for item in payload.get("results", []):
             cwe_node = item.get("issue_cwe")
@@ -105,10 +130,13 @@ class CppcheckRunner(ToolRunner):
     def scan(self, path: Path) -> tuple[List[Finding], List[str]]:
         if not self.available("cppcheck"):
             return [], ["cppcheck is not installed or not on PATH"]
-        completed = self.run(
-            ["cppcheck", "--xml", "--xml-version=2", "--enable=all", str(path)]
-        )
-        xml_text = completed.stderr or completed.stdout
+        try:
+            completed = self.run(
+                ["cppcheck", "--xml", "--xml-version=2", "--enable=all", str(path)]
+            )
+        except Exception as exc:  # noqa: BLE001 - one tool must not stop a run
+            return [], [f"cppcheck failed to run: {type(exc).__name__}: {exc}"]
+        xml_text = completed.stderr or completed.stdout or ""
         findings: List[Finding] = []
         errors: List[str] = []
         try:
@@ -229,7 +257,10 @@ class FlawfinderRunner(ToolRunner):
     def scan(self, path: Path) -> tuple[List[Finding], List[str]]:
         if not self.available("flawfinder"):
             return [], ["flawfinder is not installed or not on PATH"]
-        completed = self.run(["flawfinder", "--csv", str(path)])
+        try:
+            completed = self.run(["flawfinder", "--csv", str(path)])
+        except Exception as exc:  # noqa: BLE001 - one tool must not stop a run
+            return [], [f"flawfinder failed to run: {type(exc).__name__}: {exc}"]
         findings: List[Finding] = []
         errors: List[str] = []
         try:
@@ -345,15 +376,23 @@ class ClangStaticAnalyzerRunner(ToolRunner):
                 "-fsyntax-only",
                 str(path),
             ]
-            completed = self.run(command)
+            try:
+                completed = self.run(command)
+            except Exception as exc:  # noqa: BLE001 - one tool must not stop a run
+                return [], [f"scan-build failed to run: {type(exc).__name__}: {exc}"]
             plist_files = list(out_dir.rglob("*.plist")) if out_dir.exists() else []
             for plist_file in plist_files:
-                findings.extend(self._parse_plist(plist_file))
+                try:
+                    findings.extend(self._parse_plist(plist_file))
+                except Exception as exc:  # noqa: BLE001 - corrupt plist must not stop a run
+                    errors.append(f"clang plist {plist_file.name} unparsable: {type(exc).__name__}: {exc}")
 
             if completed.returncode not in (0, 1):
+                stderr = completed.stderr or ""
+                stdout = completed.stdout or ""
                 errors.append(
                     f"scan-build exited with {completed.returncode}: "
-                    f"{completed.stderr[-1000:] or completed.stdout[-1000:]}"
+                    f"{stderr[-1000:] or stdout[-1000:]}"
                 )
         return findings, errors
 

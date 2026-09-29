@@ -51,7 +51,7 @@ def _make_phase2(config: Config):
     single-agent pipeline is the same evidence with the two roles merged, so
     setting the architecture is what isolates the contribution of the split.
     """
-    architecture = config.phase2_architecture
+    architecture = str(config.phase2_architecture or "multi_agent").strip().lower().replace("-", "_")
     if architecture == "multi_agent":
         from phase2.client import build_pipeline
         from phase2.multiagent import MultiAgentConfig
@@ -120,9 +120,10 @@ def _source_files(pipeline, path: Path) -> List[Path]:
 
 def _pipeline_method(architecture: str) -> str:
     """The provenance label for a directory-level Phase 2 report."""
-    if architecture == "multi_agent":
+    normalized = str(architecture or "").strip().lower().replace("-", "_")
+    if normalized == "multi_agent":
         return "scanner_then_verifier"
-    if architecture == "single_agent":
+    if normalized == "single_agent":
         return "single_security_agent"
     raise ValueError(
         f"PHASE2_ARCHITECTURE must be 'multi_agent' or 'single_agent', "
@@ -132,7 +133,18 @@ def _pipeline_method(architecture: str) -> str:
 
 def _analyze_file_report(phase1_pipeline, phase2_pipeline, path: Path) -> Dict[str, Any]:
     """Run Phase 1 and Phase 2 for one file, preserving pipeline failures."""
-    phase1 = phase1_pipeline.analyze_file(path)
+    try:
+        phase1 = phase1_pipeline.analyze_file(path)
+    except Exception as exc:  # noqa: BLE001 - one bad file must not stop a directory run
+        return {
+            "source": str(path),
+            "language": "unknown",
+            "decisions": [],
+            "errors": [f"phase1 {type(exc).__name__}: {exc}"],
+            "metadata": {"input_group_count": 0},
+        }
+    # A Phase 1 structural/tool failure is still a report: run Phase 2 over
+    # it so the error is preserved downstream instead of aborting the loop.
     try:
         report = phase2_pipeline.analyze_report(phase1)
         if asyncio.iscoroutine(report):

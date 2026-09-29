@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 
-from analyzers.catalog import get_catalog
+from analyzers.catalog import VulnerabilityCatalog, get_catalog
 from analyzers.taint import taint_chains_for, taint_modelled
 
 from .context import load_source_context

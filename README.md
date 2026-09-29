@@ -232,7 +232,7 @@ Phase 2 talks to a running **OpenCode server** through its session API — not
 to a raw OpenAI-compatible endpoint. Start one and point the pipeline at it:
 
 ```bash
-opencode serve --port 4096 --hostname 127.0.0.1
+lingling serve --port 4096 --hostname 127.0.0.1
 cp .env.example .env   # then set LLM_BASE_URL, LLM_MODEL_ID, LLM_PROVIDER_ID
 ```
 

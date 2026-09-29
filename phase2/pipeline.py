@@ -74,11 +74,17 @@ class Phase2Pipeline:
             ],
             return_exceptions=True,
         )
-        for result in results:
+        for group, result in zip(groups, results):
             if isinstance(result, Exception):
-                phase2.errors.append(f"{type(result).__name__}: {result}")
+                group_id = group.get("id", "G-UNKNOWN") if isinstance(group, dict) else "G-UNKNOWN"
+                phase2.errors.append(f"{group_id}: {type(result).__name__}: {result}")
             elif result is not None:
                 phase2.decisions.append(result)
+                # Transport/parse failures are surfaced as UNCERTAIN decisions;
+                # also record them centrally so an LLM outage is visible in
+                # `errors` instead of hiding inside decision rationales.
+                if result.rationale.startswith("Security Agent failure:"):
+                    phase2.errors.append(f"{result.group_id}: {result.rationale}")
 
         phase2.metadata["decision_counts"] = {
             status: sum(1 for d in phase2.decisions if d.status == status)

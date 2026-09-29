@@ -35,28 +35,54 @@ class Phase1Pipeline:
         run_clang: bool = True,
     ) -> Dict[str, Any]:
         source_path = Path(path).resolve()
-        language = self.structural.detect_language(source_path)
+        try:
+            language = self.structural.detect_language(source_path)
+        except ValueError as exc:
+            report = NormalizedReport(
+                source=str(source_path), language="unknown"
+            )
+            report.errors.append(str(exc))
+            report.metadata["structure"] = {"path": str(source_path), "error": str(exc)}
+            return report.to_dict()
         report = NormalizedReport(source=str(source_path), language=language)
 
-        structural = self.structural.analyze_file(source_path)
+        try:
+            structural = self.structural.analyze_file(source_path)
+        except (OSError, UnicodeError, ValueError, RuntimeError) as exc:
+            report.errors.append(f"structural analysis failed: {exc}")
+            report.metadata["structure"] = {"path": str(source_path), "error": str(exc)}
+            report.metadata["tool_status"] = self._tool_status(language)
+            return report.to_dict()
         report.metadata["structure"] = structural
 
         if language == "python":
             if run_bandit:
-                findings, errors = self.bandit.scan(source_path)
+                try:
+                    findings, errors = self.bandit.scan(source_path)
+                except Exception as exc:  # noqa: BLE001 - one tool must not stop a file
+                    findings, errors = [], [f"bandit crashed: {type(exc).__name__}: {exc}"]
                 report.findings.extend(findings)
                 report.errors.extend(errors)
         elif language in {"c", "cpp"}:
             if run_cppcheck:
-                findings, errors = self.cppcheck.scan(source_path)
+                try:
+                    findings, errors = self.cppcheck.scan(source_path)
+                except Exception as exc:  # noqa: BLE001
+                    findings, errors = [], [f"cppcheck crashed: {type(exc).__name__}: {exc}"]
                 report.findings.extend(findings)
                 report.errors.extend(errors)
             if run_flawfinder:
-                findings, errors = self.flawfinder.scan(source_path)
+                try:
+                    findings, errors = self.flawfinder.scan(source_path)
+                except Exception as exc:  # noqa: BLE001
+                    findings, errors = [], [f"flawfinder crashed: {type(exc).__name__}: {exc}"]
                 report.findings.extend(findings)
                 report.errors.extend(errors)
             if run_clang:
-                findings, errors = self.clang.scan(source_path)
+                try:
+                    findings, errors = self.clang.scan(source_path)
+                except Exception as exc:  # noqa: BLE001
+                    findings, errors = [], [f"clang crashed: {type(exc).__name__}: {exc}"]
                 report.findings.extend(findings)
                 report.errors.extend(errors)
 
@@ -84,7 +110,12 @@ class Phase1Pipeline:
                     {"path": item.get("path"), "error": item.get("error")}
                 )
                 continue
-            reports.append(self.analyze_file(item["path"]))
+            try:
+                reports.append(self.analyze_file(item["path"]))
+            except Exception as exc:  # noqa: BLE001 - one bad file must not stop a directory scan
+                scan_errors.append(
+                    {"path": item.get("path"), "error": f"{type(exc).__name__}: {exc}"}
+                )
 
         return {
             "root": str(path_obj),
@@ -124,7 +155,12 @@ def main() -> None:
     args = _build_parser().parse_args()
     pipeline = Phase1Pipeline()
 
-    if Path(args.path).is_file():
+    target = Path(args.path)
+    if not target.exists():
+        print(f"error: path does not exist: {args.path}", flush=True)
+        raise SystemExit(2)
+
+    if target.is_file():
         result = pipeline.analyze_file(
             args.path,
             run_bandit=not args.no_bandit,
@@ -137,7 +173,9 @@ def main() -> None:
 
     rendered = json.dumps(result, indent=2, ensure_ascii=False)
     if args.out:
-        Path(args.out).write_text(rendered + "\n", encoding="utf-8")
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(rendered + "\n", encoding="utf-8")
         print(f"Report written to {args.out}")
     else:
         print(rendered)

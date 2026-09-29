@@ -17,13 +17,28 @@ def _load_dotenv(path: Path | None = None) -> None:
     env_file = path or PROJECT_ROOT / ".env"
     if not env_file.exists():
         return
-    for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+    try:
+        content = env_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+    for raw_line in content.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        # Accept `export KEY=value` as well as `KEY=value`, and strip
+        # trailing inline comments that are not inside quotes.
+        if line.lower().startswith("export "):
+            line = line[7:].lstrip()
         key, value = line.split("=", 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        else:
+            # Unquoted inline comment: `KEY=value # comment`.
+            hash_at = value.find(" #")
+            if hash_at != -1:
+                value = value[:hash_at].strip()
         if key and key not in os.environ:
             os.environ[key] = value
 

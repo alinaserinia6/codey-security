@@ -93,11 +93,20 @@ class SecurityAgent:
             or os.getenv("LLM_MODE")
             or "build"
         )
-        self.timeout = float(
+        raw_timeout = (
             timeout
             if timeout is not None
             else _safe_float(os.getenv("LLM_TIMEOUT"), 300.0)
         )
+        try:
+            raw_timeout = float(raw_timeout)
+        except (TypeError, ValueError):
+            raw_timeout = 300.0
+        # Clamp to a sane range: non-positive/NaN timeouts would otherwise
+        # fail every request immediately with a confusing error.
+        if not raw_timeout == raw_timeout or raw_timeout <= 0:
+            raw_timeout = 300.0
+        self.timeout = min(raw_timeout, 3600.0)
         self.reuse_session = (
             reuse_session
             if reuse_session is not None
@@ -113,7 +122,16 @@ class SecurityAgent:
     # Session handling
     # ------------------------------------------------------------------
     async def _new_session_id(self) -> str:
-        session = await asyncio.to_thread(self.client.session.create)
+        try:
+            session = await asyncio.wait_for(
+                asyncio.to_thread(self.client.session.create),
+                timeout=min(self.timeout, 60.0),
+            )
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"LLM session.create timed out after {min(self.timeout, 60.0)}s "
+                f"(base_url={self.base_url})"
+            ) from exc
         session_id = getattr(session, "id", None)
         if session_id is None and isinstance(session, dict):
             session_id = session.get("id")
@@ -131,6 +149,15 @@ class SecurityAgent:
             if self._session_id is None:
                 self._session_id = await self._new_session_id()
             return self._session_id
+
+    def _drop_session(self) -> None:
+        """Forget a reused session id so the next call starts fresh.
+
+        A stale/invalid session id otherwise poisons every later request
+        when ``reuse_session`` is on; dropping it turns one failure into a
+        retry instead of a run-wide outage.
+        """
+        self._session_id = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -170,9 +197,17 @@ class SecurityAgent:
         try:
             result = await asyncio.wait_for(chat_call, timeout=self.timeout)
         except asyncio.TimeoutError as exc:
+            self._drop_session()
             raise TimeoutError(
-                f"LLM request timed out after {self.timeout}s"
+                f"LLM request timed out after {self.timeout}s "
+                f"(base_url={self.base_url}, model={self.model_id})"
             ) from exc
+        except (OSError, ConnectionError, ValueError, RuntimeError) as exc:
+            # Transport-level failures poison a reused session id; drop it
+            # so the next request starts a fresh session instead of reusing
+            # the broken one.
+            self._drop_session()
+            raise
 
         parts = self._extract_parts(result)
 
