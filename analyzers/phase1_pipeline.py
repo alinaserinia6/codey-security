@@ -8,7 +8,6 @@ from typing import Any, Dict, List
 from .finding import NormalizedReport, correlate_findings, deduplicate_findings
 from .static_tools import (
     BanditRunner,
-    ClangStaticAnalyzerRunner,
     CppcheckRunner,
     FlawfinderRunner,
 )
@@ -23,7 +22,6 @@ class Phase1Pipeline:
         self.bandit = BanditRunner(timeout=timeout)
         self.cppcheck = CppcheckRunner(timeout=timeout)
         self.flawfinder = FlawfinderRunner(timeout=timeout)
-        self.clang = ClangStaticAnalyzerRunner(timeout=timeout)
 
     def analyze_file(
         self,
@@ -32,7 +30,6 @@ class Phase1Pipeline:
         run_bandit: bool = True,
         run_cppcheck: bool = True,
         run_flawfinder: bool = True,
-        run_clang: bool = True,
     ) -> Dict[str, Any]:
         source_path = Path(path).resolve()
         try:
@@ -76,13 +73,6 @@ class Phase1Pipeline:
                     findings, errors = self.flawfinder.scan(source_path)
                 except Exception as exc:  # noqa: BLE001
                     findings, errors = [], [f"flawfinder crashed: {type(exc).__name__}: {exc}"]
-                report.findings.extend(findings)
-                report.errors.extend(errors)
-            if run_clang:
-                try:
-                    findings, errors = self.clang.scan(source_path)
-                except Exception as exc:  # noqa: BLE001
-                    findings, errors = [], [f"clang crashed: {type(exc).__name__}: {exc}"]
                 report.findings.extend(findings)
                 report.errors.extend(errors)
 
@@ -134,7 +124,6 @@ class Phase1Pipeline:
         return {
             "cppcheck": self.cppcheck.available("cppcheck"),
             "flawfinder": self.flawfinder.available("flawfinder"),
-            "scan-build": self.clang.available("scan-build"),
         }
 
 
@@ -147,7 +136,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-bandit", action="store_true")
     parser.add_argument("--no-cppcheck", action="store_true")
     parser.add_argument("--no-flawfinder", action="store_true")
-    parser.add_argument("--no-clang", action="store_true")
     return parser
 
 
@@ -166,7 +154,6 @@ def main() -> None:
             run_bandit=not args.no_bandit,
             run_cppcheck=not args.no_cppcheck,
             run_flawfinder=not args.no_flawfinder,
-            run_clang=not args.no_clang,
         )
     else:
         result = pipeline.analyze_path(args.path)

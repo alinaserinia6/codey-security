@@ -3,6 +3,12 @@
     python scripts/make_manifest.py sard --root datasets/sard --out datasets/sard.json
     python scripts/make_manifest.py devign --input datasets/devign.json \\
         --out datasets/devign_manifest.json
+    python scripts/make_manifest.py primevul --input primevul_test_paired.jsonl \
+        --out datasets/primevul_test_paired.json
+    python scripts/make_manifest.py bigvul-hf --input bigvul_test.parquet \
+        --out datasets/bigvul_test.json
+    python scripts/make_manifest.py vulnllm-r --input function_level.parquet \
+        --out datasets/vulnllm_r_c.json --vr-language c --split function_level
     python scripts/make_manifest.py big-vul --input datasets/big-vul.json \\
         --out datasets/big_vul_manifest.json
 
@@ -24,14 +30,19 @@ if str(REPO_ROOT) not in sys.path:
 from phase3.loaders import (  # noqa: E402
     FunctionCorpusOptions,
     LoaderError,
+    RealWorldOptions,
     SardOptions,
+    VulnLLMROptions,
     load_big_vul,
+    load_bigvul_hf,
     load_devign,
+    load_primevul,
     load_sard,
+    load_vulnllm_r,
     write_manifest,
 )
 
-CORPORA = ("sard", "devign", "big-vul")
+CORPORA = ("sard", "devign", "big-vul", "primevul", "bigvul-hf", "vulnllm-r")
 
 
 def build(args: argparse.Namespace):
@@ -44,7 +55,7 @@ def build(args: argparse.Namespace):
             assume_vulnerable=args.assume_vulnerable,
         )
         payload = load_sard(args.root, options, max_samples=args.limit)
-    else:
+    elif args.corpus in ("devign", "big-vul"):
         if not args.input:
             raise LoaderError(f"--input is required for {args.corpus}")
         options = FunctionCorpusOptions()
@@ -60,6 +71,37 @@ def build(args: argparse.Namespace):
         payload = loader(
             args.input, options=options, out_dir=out_dir, max_samples=args.limit
         )
+        return payload
+    # Real-world Hugging Face layouts: PrimeVul JSONL and Big-Vul parquet/CSV.
+    if args.corpus == "vulnllm-r":
+        if not args.input:
+            raise LoaderError("--input is required for vulnllm-r")
+        options = VulnLLMROptions(
+            languages=args.vr_language or ["c", "python"],
+            split=args.split,
+            cwe_filter=args.cwe,
+            balanced=not args.no_balanced,
+            seed=args.seed,
+            relative_to=args.out.parent,
+        )
+        out_dir = args.out_dir or args.out.parent / "vulnllm_r"
+        payload = load_vulnllm_r(
+            args.input, options=options, out_dir=out_dir, max_samples=args.limit
+        )
+        return payload
+    if not args.input:
+        raise LoaderError(f"--input is required for {args.corpus}")
+    options = RealWorldOptions(
+        cwe_filter=args.cwe,
+        balanced=not args.no_balanced,
+        seed=args.seed,
+        relative_to=args.out.parent,
+    )
+    loader = load_primevul if args.corpus == "primevul" else load_bigvul_hf
+    out_dir = args.out_dir or args.out.with_name(args.out.stem + "_functions")
+    payload = loader(
+        args.input, options=options, out_dir=out_dir, max_samples=args.limit
+    )
     return payload
 
 
@@ -91,6 +133,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     parser.add_argument("--language", default=None, help="override the language")
     parser.add_argument("--suffix", default=None, help="override the written suffix")
+    parser.add_argument("--cwe", action="append", default=None,
+                        help="primevul/bigvul-hf: keep only this CWE; repeatable")
+    parser.add_argument("--no-balanced", action="store_true",
+                        help="primevul/bigvul-hf: keep the natural class ratio")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="primevul/bigvul-hf: sampling seed")
+    parser.add_argument("--vr-language", action="append", default=None,
+                        help="vulnllm-r: score only this language; repeatable "
+                             "(default: c and python)")
+    parser.add_argument("--split", default="function_level",
+                        help="vulnllm-r: test split name recorded in the manifest")
     args = parser.parse_args(argv)
     if args.extension is None:
         args.extension = [".c", ".cpp", ".cc", ".cxx", ".py"]

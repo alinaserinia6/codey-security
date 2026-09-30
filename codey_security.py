@@ -118,6 +118,44 @@ def _source_files(pipeline, path: Path) -> List[Path]:
     return sorted(files)
 
 
+def _collect_report_errors(reports: List[Dict[str, Any]]) -> List[tuple]:
+    """(sample_id, error) pairs from Phase-3 style report entries.
+
+    Handles both shapes: phase1 entries carry ``report.errors`` (or a
+    ``skipped`` reason) and phase2 entries carry ``phase1``/``phase2``
+    sub-reports each with their own ``errors`` list.
+    """
+    pairs: List[tuple] = []
+    for entry in reports:
+        sample_id = str(entry.get("sample_id", "<unknown>"))
+        if entry.get("skipped"):
+            pairs.append((sample_id, f"skipped: {entry.get('reason', 'unknown reason')}"))
+            continue
+        for key in ("report", "phase1", "phase2"):
+            sub = entry.get(key)
+            if isinstance(sub, dict):
+                for err in sub.get("errors", []) or []:
+                    pairs.append((sample_id, f"{key}: {err}" if key != "report" else str(err)))
+    return pairs
+
+
+def _print_error_summary(pairs: List[tuple], *, limit: int = 10) -> None:
+    """Echo collected errors to the terminal so failures are visible without
+    opening the output JSON. A run whose samples all failed used to look
+    identical to a clean one on the terminal."""
+    if not pairs:
+        return
+    print(
+        f"\n{len(pairs)} error(s) across "
+        f"{len({sample for sample, _ in pairs})} sample(s):",
+        file=sys.stderr,
+    )
+    for sample_id, err in pairs[:limit]:
+        print(f"  ERROR {sample_id}: {err}", file=sys.stderr)
+    if len(pairs) > limit:
+        print(f"  ... and {len(pairs) - limit} more (see output JSON)", file=sys.stderr)
+
+
 def _pipeline_method(architecture: str) -> str:
     """The provenance label for a directory-level Phase 2 report."""
     normalized = str(architecture or "").strip().lower().replace("-", "_")
@@ -220,6 +258,19 @@ def run_phase1(config: Config) -> dict[str, Any]:
     return report
 
 
+def _ensure_thinking_out(output: str) -> None:
+    """Point the model-reasoning trace next to the report it belongs to.
+
+    ``LLM_THINKING_OUT`` is normally set by ``scripts/run_benchmarks.py``; this
+    default keeps a direct ``phase2``/``phase3`` run equally auditable instead
+    of only printing the reasoning to a terminal nobody keeps.
+    """
+    if os.environ.get("LLM_THINKING_OUT"):
+        return
+    path = Path(output)
+    os.environ["LLM_THINKING_OUT"] = str(path.with_suffix(".thinking.json"))
+
+
 def run_phase2(config: Config) -> dict[str, Any]:
     from analyzers.phase1_pipeline import Phase1Pipeline
 
@@ -231,6 +282,7 @@ def run_phase2(config: Config) -> dict[str, Any]:
     if not source.exists():
         raise FileNotFoundError(f"Phase 2 source does not exist: {source}")
 
+    _ensure_thinking_out(scenario.output)
     phase1_pipeline = Phase1Pipeline()
     phase2_pipeline = _make_phase2(config)
 
@@ -238,6 +290,8 @@ def run_phase2(config: Config) -> dict[str, Any]:
         phase1 = phase1_pipeline.analyze_file(source)
         result = asyncio.run(phase2_pipeline.analyze_report(phase1))
         _write_json(result, scenario.output)
+        for entry in result.get("errors", []) or []:
+            print(f"ERROR {entry}", file=sys.stderr, flush=True)
         return result
 
     # Directory branch: iterate every analyzable file and merge.
@@ -258,6 +312,8 @@ def run_phase2(config: Config) -> dict[str, Any]:
         method=_pipeline_method(config.phase2_architecture),
     )
     _write_json(merged, scenario.output)
+    for entry in merged.get("errors", []) or []:
+        print(f"ERROR {entry}", file=sys.stderr, flush=True)
     return merged
 
 
@@ -269,7 +325,6 @@ def _tool_versions() -> Dict[str, str]:
     for name, argv in (
         ("cppcheck", ["cppcheck", "--version"]),
         ("flawfinder", ["flawfinder", "--version"]),
-        ("clang", ["clang", "--version"]),
         ("bandit", ["bandit", "--version"]),
     ):
         try:
@@ -311,6 +366,7 @@ def run_phase3(config: Config) -> dict[str, Any]:
             dataset, phase1, skip_missing=scenario.skip_missing
         )
     else:
+        _ensure_thinking_out(scenario.output)
         phase2 = _make_phase2(config)
         predictions, reports = run_phase2_benchmark(dataset, phase1, phase2)
 
@@ -345,6 +401,7 @@ def run_phase3(config: Config) -> dict[str, Any]:
     }
     save_result(result, scenario.output)
     print(f"Report written to {scenario.output}")
+    _print_error_summary(_collect_report_errors(reports))
     return result.to_dict()
 
 
@@ -368,6 +425,7 @@ def run_full(config: Config) -> dict[str, Any]:
     _write_json(phase1, scenario.phase1_output or "results/phase1_report.json")
 
     print("[2/3] Running Phase 2...")
+    _ensure_thinking_out(scenario.phase2_output or "results/phase2_report.json")
     phase2_pipeline = _make_phase2(config)
     if source.is_file():
         phase2 = asyncio.run(phase2_pipeline.analyze_report(phase1))

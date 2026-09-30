@@ -27,6 +27,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
 from analyzers.catalog import VulnerabilityCatalog, get_catalog
 from analyzers.taint import taint_chains_for, taint_modelled
 
+from agents import thinking_log
+
 from .context import load_source_context
 from .models import (
     AgentAssessment,
@@ -117,7 +119,8 @@ class MultiAgentPipeline:
 
         scan_packet = self._scan_packet(source, language, report)
         try:
-            raw = await self.ask_json(SCANNER_PROMPT, scan_packet)
+            with thinking_log.scope(id=source, file=source, role="scanner"):
+                raw = await self.ask_json(SCANNER_PROMPT, scan_packet)
             hypotheses = self._parse_hypotheses(raw)
         except Exception as exc:  # noqa: BLE001 - one file must not stop a run
             result.errors.append(f"scanner: {type(exc).__name__}: {exc}")
@@ -130,7 +133,10 @@ class MultiAgentPipeline:
             return result.to_dict()
 
         verifications = await asyncio.gather(
-            *[self._verify_one(h, scan_packet, result) for h in hypotheses],
+            *[
+                self._verify_one(h, scan_packet, result, source)
+                for h in hypotheses
+            ],
             return_exceptions=True,
         )
         verdicts: List[str] = []
@@ -209,6 +215,7 @@ class MultiAgentPipeline:
         hypothesis: Hypothesis,
         scan_packet: Dict[str, Any],
         result: Phase2Report,
+        source: str,
     ) -> Optional[tuple]:
         async with self._sem:
             chains = self._chains_near(scan_packet, hypothesis.line)
@@ -219,7 +226,7 @@ class MultiAgentPipeline:
                 "file": scan_packet.get("file"),
                 "hypothesis": hypothesis.to_dict(),
                 "source_context": self._context_at(
-                    scan_packet, hypothesis.line
+                    scan_packet, hypothesis.line, source
                 ),
                 "dataflow_chains": chains,
             }
@@ -237,7 +244,10 @@ class MultiAgentPipeline:
 
             packet = sanitize_value(packet)
             try:
-                raw = await self.ask_json(VERIFIER_PROMPT, packet)
+                with thinking_log.scope(
+                    id=source, file=source, role="verifier", hypothesis=hypothesis.id
+                ):
+                    raw = await self.ask_json(VERIFIER_PROMPT, packet)
             except Exception as exc:  # noqa: BLE001
                 result.errors.append(
                     f"verifier[{hypothesis.id}]: {type(exc).__name__}: {exc}"
@@ -534,14 +544,21 @@ class MultiAgentPipeline:
         return near or list(findings)
 
     def _context_at(
-        self, packet: Dict[str, Any], line: Optional[int]
+        self, packet: Dict[str, Any], line: Optional[int], source: str
     ) -> Dict[str, Any]:
+        """The source around one hypothesis, read from the real path.
+
+        ``packet["file"]`` has already been through ``sanitize_value``, which
+        rewrites the leaking ``good``/``bad``/``CWE*`` path segments so the
+        agent cannot read the ground-truth label out of the filename. Reading
+        the disk with that rewritten path fails with ENOENT and leaves the
+        verifier with an empty snippet — so the unsanitised path is passed in
+        explicitly instead of being taken back out of the packet.
+        """
         context = packet.get("source_context") or {}
         if line is None or not context.get("available"):
             return context
-        return load_source_context(
-            packet.get("file", "<unknown>"), line, self.cfg.context_radius
-        )
+        return load_source_context(source, line, self.cfg.context_radius)
 
     @staticmethod
     def _best_chain(

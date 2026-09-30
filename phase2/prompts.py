@@ -25,6 +25,9 @@ _SHARED_RULES = """
 Hard rules:
 - Use ONLY the evidence in the packet. Never assume a vulnerability exists
   because the surrounding code "looks dangerous".
+- The packet is the whole world: you have no file-system, shell or search
+  tools, so never ask for, or try to open, locate or list the source file.
+  Judge from `source_context` and the other evidence embedded here.
 - Never name a CWE you have no concrete reason to apply.
 - If the packet does not settle the question, say so instead of guessing.
 - Reply with a single valid JSON object and no other text.

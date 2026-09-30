@@ -185,6 +185,11 @@ async def run(args: argparse.Namespace) -> int:
         "findings": sum(len(r.get("findings", []) or []) for r in results),
         "decisions": totals,
         "errors": errors,
+        "error_details": [
+            f"{r.get('source', '<unknown>')}: {e}"
+            for r in results
+            for e in (r.get("errors", []) or [])
+        ][:8],
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)

@@ -201,6 +201,59 @@ def test_scanner_receives_structural_and_tool_evidence(tmp_path):
     assert scanner["source_context"]["available"] is True
 
 
+def test_verifier_reads_the_real_file_when_the_path_is_sanitised(tmp_path):
+    """Regression: the sanitiser rewrites leaking path segments.
+
+    ``.../good/sample.py`` is shown to the model as ``.../sym_XXXX/sample.py``
+    so the variant cannot be read off the filename. Reading the disk with that
+    rewritten path raised ENOENT, so the verifier was shown an empty snippet
+    for every Juliet/VulnLLM sample and answered UNCERTAIN by default. The
+    packet keeps the sanitised path; the file read must use the real one.
+    """
+    directory = tmp_path / "good"
+    directory.mkdir()
+    path = directory / "sample.py"
+    path.write_text(VULNERABLE)
+
+    agent = StubAgent(
+        {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "x"}]},
+        [{"decision": "REJECTED", "confidence": 0.9}],
+    )
+    run(agent, phase1_report(path))
+
+    verifier = next(p for s, p in agent.prompts if p.get("role") == "verifier")
+    context = verifier["source_context"]
+    assert context["available"] is True, context.get("error")
+    assert "subprocess" in context["snippet"]
+    # The label-hiding rewrite of the path must survive into the packet.
+    assert str(path) not in json.dumps(verifier)
+
+
+def test_agents_announce_their_sample_to_the_thinking_log(tmp_path):
+    """Both roles report the real path, whatever the packet shows the model."""
+    from agents import thinking_log
+
+    directory = tmp_path / "bad"
+    directory.mkdir()
+    path = directory / "sample.py"
+    path.write_text(VULNERABLE)
+    seen: List[Dict[str, Any]] = []
+
+    class ScopedStub(StubAgent):
+        async def __call__(self, system: str, packet: Dict[str, Any]):
+            seen.append(thinking_log.current_scope())
+            return await super().__call__(system, packet)
+
+    agent = ScopedStub(
+        {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "x"}]},
+        [{"decision": "REJECTED", "confidence": 0.9}],
+    )
+    run(agent, phase1_report(path))
+
+    assert [s["role"] for s in seen] == ["scanner", "verifier"]
+    assert all(s["file"] == str(path) and s["id"] == str(path) for s in seen)
+
+
 # -- reject by default ---------------------------------------------------
 
 def test_rejected_hypothesis_produces_no_finding(tmp_path):
@@ -464,6 +517,28 @@ def test_confirmed_without_a_chain_is_rejected(tmp_path):
     assert "no source-to-sink path" in result["decisions"][0]["rationale"]
 
 
+def test_confirmed_heap_overflow_without_a_chain_is_rejected(tmp_path):
+    """CWE-122 names the same overflow-write shape the engine files as
+    CWE-120, so it is held to the chain gate: a CONFIRMED heap overflow
+    with no source-to-sink path in the file must not be reported."""
+    path = write(
+        tmp_path,
+        '#include <string.h>\n'
+        'void greet(void) {\n'
+        '    char buf[16];\n'
+        '    strcpy(buf, "hello");\n'
+        '}\n',
+        "ovf.c",
+    )
+    agent = StubAgent(
+        confirm({"cwe": "CWE-122", "line": 4, "claim": "x"}), [yes()]
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["findings"] == []
+    assert "no source-to-sink path" in result["decisions"][0]["rationale"]
+
+
 def test_chain_gate_is_the_default_and_can_be_ablated(tmp_path):
     path = write(tmp_path, NO_CHAIN)
     agent = StubAgent(
@@ -495,6 +570,20 @@ def test_taint_modelled_covers_the_injection_classes():
     assert taint_modelled("cwe-78") is True
     assert taint_modelled("CWE-190") is False
     assert taint_modelled("") is False
+
+
+def test_taint_modelled_covers_the_buffer_overflow_family():
+    """Juliet labels heap overflows CWE-122 while the engine files chains
+    under CWE-120; without the alias the chain gate would exempt the
+    proposal's flagship C class. Over-reads stay exempt: the engine tracks
+    writes to dangerous sinks, not out-of-bounds reads."""
+    from analyzers.taint import taint_modelled
+
+    for cwe in ("CWE-122", "CWE-121", "CWE-119", "CWE-787", "CWE-788",
+                "CWE-123", "CWE-124", "CWE-131", "cwe-122"):
+        assert taint_modelled(cwe) is True, cwe
+    for cwe in ("CWE-190", "CWE-191", "CWE-125", "CWE-126", "CWE-127", ""):
+        assert taint_modelled(cwe) is False, cwe
 
 
 def test_confirmation_without_chain_verified_is_rejected(tmp_path):

@@ -33,7 +33,7 @@ def check(label: str, ok: bool, detail: str = "", *, warn_only: bool = False) ->
 def main() -> int:
     print(f"repo: {REPO_ROOT}")
 
-    for command in ("cppcheck", "flawfinder", "clang", "scan-build"):
+    for command in ("cppcheck", "flawfinder"):
         path = shutil.which(command)
         check(command, path is not None, path or "not on PATH")
 

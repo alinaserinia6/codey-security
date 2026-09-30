@@ -11,10 +11,15 @@ import asyncio
 import json
 import os, sys
 import textwrap
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from opencode_ai import Opencode
 from opencode_ai.types import TextPartInputParam
+
+from . import thinking_log
+from .openai_compat import OpenAICompat, TruncatedResponse, resolve_transport
 
 
 SECURITY_SYSTEM_PROMPT = """
@@ -32,6 +37,9 @@ Rules:
 5. Do not modify source code.
 6. Preserve the reported CWE unless the supplied evidence clearly contradicts it.
 7. Return ONLY one valid JSON object, with no Markdown, no prose, no fences.
+8. You have no file-system, shell or search access: the packet is the entire
+   evidence. Never try to open, locate, list or read a file — judge from what
+   is embedded here.
 
 Decision meanings:
 CONFIRMED = supplied evidence is sufficient to support the vulnerability.
@@ -57,6 +65,20 @@ def _safe_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Worth another attempt?
+
+    A timeout, a transport failure or an unparsable reply are all "the
+    endpoint had a bad moment" cases — a second try usually succeeds. A
+    programming error is not, and retrying it would only double the delay
+    before the caller sees it. A reply that was cut off at ``max_tokens``
+    is also excluded: the same request would be cut off again.
+    """
+    if isinstance(exc, TruncatedResponse):
+        return False
+    return isinstance(exc, (TimeoutError, RuntimeError, ValueError))
 
 
 class SecurityAgent:
@@ -114,9 +136,40 @@ class SecurityAgent:
             in {"1", "true", "yes", "on"}
         )
 
-        self.client = Opencode(base_url=self.base_url, timeout=self.timeout)
+        # `LLM_BASE_URL` selects the wire format: an OpenCode server (the
+        # historical local endpoint) or any OpenAI-compatible /v1 API such as
+        # https://api.apmix.ai/v1. See agents/openai_compat.py.
+        self.transport = resolve_transport(self.base_url)
+        if self.transport == "openai":
+            self.client = None
+            self._openai = OpenAICompat(
+                base_url=self.base_url,
+                model_id=self.model_id,
+                timeout=self.timeout,
+            )
+        else:
+            self._openai = None
+            self.client = Opencode(base_url=self.base_url, timeout=self.timeout)
         self._session_id: Optional[str] = None
         self._session_lock = asyncio.Lock()
+
+    def _context(self) -> str:
+        return (
+            f"transport={self.transport} base_url={self.base_url} "
+            f"model={self.model_id} provider={self.provider_id}"
+        )
+
+    def _wrap_transport_error(self, exc: BaseException, operation: str) -> RuntimeError:
+        """Attach the endpoint identity to a transport/API failure.
+
+        Raw SDK errors say only ``Connection error`` — without the URL and
+        model the message is unactionable in logs and reports, so the
+        endpoint context is prepended while the original error is chained.
+        """
+        return RuntimeError(
+            f"LLM {operation} failed ({self._context()}): "
+            f"{type(exc).__name__}: {exc}"
+        )
 
     # ------------------------------------------------------------------
     # Session handling
@@ -175,15 +228,132 @@ class SecurityAgent:
         shape. The Scanner and Verifier roles have their own output contracts
         (``hypotheses`` and ``chain_verified`` respectively), so they pass
         ``normalize=False`` and parse the reply themselves.
+
+        A request that times out, fails in transport or comes back unparsable
+        is retried once (``LLM_MAX_ATTEMPTS``, default 2) on a fresh session:
+        on a slow free endpoint one dropped or truncated reply is common, and
+        retrying costs less than scoring the sample as an error. Every attempt
+        — including the failing ones — is appended to the thinking log when
+        ``LLM_THINKING_OUT`` is set.
         """
-        prompt = (
-            (system_prompt or SECURITY_SYSTEM_PROMPT)
-            + "\n\nEvidence packet (JSON):\n"
+        # Kept as two pieces: the OpenAI-compatible transport sends them as a
+        # system + user message pair, while the OpenCode transport forwards
+        # the concatenation below, which is byte-for-byte what it always sent.
+        system = system_prompt or SECURITY_SYSTEM_PROMPT
+        user = (
+            "Evidence packet (JSON):\n"
             + json.dumps(evidence_packet, ensure_ascii=False, indent=2, default=str)
             + "\n\nReturn ONLY the JSON object described above."
         )
 
-        session_id = await self._get_session_id()
+        identity = thinking_log.current_scope()
+        packet_path = evidence_packet.get("file") or evidence_packet.get("path")
+        identity.setdefault("id", packet_path or "<unknown>")
+        identity.setdefault("file", packet_path)
+        identity.setdefault("role", evidence_packet.get("role") or "security")
+        identity["model"] = self.model_id
+
+        attempts = self._max_attempts()
+
+        def fail(
+            exc: BaseException, attempt: int, started: float, **fields: Any
+        ) -> bool:
+            """Log a failed attempt; True means it is worth trying again."""
+            self._trace(
+                dict(
+                    identity,
+                    attempt=attempt,
+                    elapsed=round(time.monotonic() - started, 2),
+                ),
+                error=f"{type(exc).__name__}: {exc}",
+                **fields,
+            )
+            return attempt < attempts and _is_retryable(exc)
+
+        for attempt in range(1, attempts + 1):
+            started = time.monotonic()
+            try:
+                parts = await self._request(system, user)
+            except Exception as exc:  # noqa: BLE001 - recorded, then retried or raised
+                if fail(exc, attempt, started):
+                    self._drop_session()
+                    await asyncio.sleep(min(2.0 * attempt, 10.0))
+                    continue
+                raise
+
+            # Stream reasoning to stderr as soon as it's available.
+            if parts["thinking"]:
+                try:
+                    self._emit_thinking(parts["thinking"], identity)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            try:
+                assessment = (
+                    self._normalize(self._parse_json(parts["text"]), evidence_packet)
+                    if normalize
+                    else self._parse_json(parts["text"])
+                )
+            except Exception as exc:  # noqa: BLE001 - truncated/garbled reply
+                if fail(
+                    exc,
+                    attempt,
+                    started,
+                    thinking=parts["thinking"],
+                    answer=parts["text"],
+                ):
+                    self._drop_session()
+                    await asyncio.sleep(min(2.0 * attempt, 10.0))
+                    continue
+                raise
+
+            self._trace(
+                dict(identity, attempt=attempt, elapsed=round(time.monotonic() - started, 2)),
+                thinking=parts["thinking"],
+                answer=assessment,
+            )
+            assessment["thinking"] = parts["thinking"]
+            return assessment
+
+        raise RuntimeError("unreachable: the attempt loop always returns or raises")
+
+    async def _request(self, system: str, user: str) -> Dict[str, str]:
+        """One transport round-trip, returning ``{"text", "thinking"}``."""
+        if self._openai is not None:
+            return await self._chat_openai(system, user)
+        return await self._chat_opencode(
+            system + "\n\n" + user if system else user
+        )
+
+    async def _chat_openai(self, system: str, user: str) -> Dict[str, str]:
+        """POST to an OpenAI-compatible ``/chat/completions`` endpoint."""
+        call = asyncio.to_thread(self._openai.chat, system, user)
+        try:
+            return await asyncio.wait_for(call, timeout=self.timeout)
+        except asyncio.TimeoutError as exc:
+            raise TimeoutError(
+                f"LLM request timed out after {self.timeout}s ({self._context()})"
+            ) from exc
+        except TruncatedResponse:
+            # Already names the knob to turn; wrapping would bury it.
+            raise
+        except ValueError:
+            # The reply was the problem, not the transport: its message is
+            # the actionable one and it is logged verbatim per attempt.
+            raise
+        except Exception as exc:
+            raise self._wrap_transport_error(exc, "chat") from exc
+
+    async def _chat_opencode(self, prompt: str) -> Dict[str, str]:
+        """Session create + message post against an OpenCode server."""
+        try:
+            session_id = await self._get_session_id()
+        except (asyncio.TimeoutError, TimeoutError):
+            # Already carries the endpoint context from _new_session_id;
+            # re-wrapping would only bury the timeout type callers log.
+            raise
+        except Exception as exc:
+            raise self._wrap_transport_error(exc, "session.create") from exc
 
         chat_call = asyncio.to_thread(
             self.client.session.chat,
@@ -199,32 +369,32 @@ class SecurityAgent:
         except asyncio.TimeoutError as exc:
             self._drop_session()
             raise TimeoutError(
-                f"LLM request timed out after {self.timeout}s "
-                f"(base_url={self.base_url}, model={self.model_id})"
+                f"LLM request timed out after {self.timeout}s ({self._context()})"
             ) from exc
-        except (OSError, ConnectionError, ValueError, RuntimeError) as exc:
-            # Transport-level failures poison a reused session id; drop it
-            # so the next request starts a fresh session instead of reusing
-            # the broken one.
+        except Exception as exc:
+            # Any transport/API failure (HTTP error codes, connection
+            # resets, SDK errors such as httpx.HTTPError which is NOT an
+            # OSError) poisons a reused session id; drop it so the next
+            # request starts fresh instead of reusing the broken one.
+            # The wrapped error keeps propagating: callers record it
+            # per sample and continue the run.
             self._drop_session()
-            raise
+            raise self._wrap_transport_error(exc, "chat") from exc
 
-        parts = self._extract_parts(result)
+        return self._extract_parts(result)
 
-        # Stream reasoning to stderr as soon as it's available.
-        if parts["thinking"]:
-            try:
-                self._thinking_printer(parts["thinking"])
-            except Exception:  # noqa: BLE001
-                pass
+    @staticmethod
+    def _max_attempts() -> int:
+        """Total attempts per sample: ``LLM_MAX_ATTEMPTS``, default 2."""
+        try:
+            value = int(os.getenv("LLM_MAX_ATTEMPTS", "2"))
+        except ValueError:
+            return 2
+        return max(1, value)
 
-        assessment = (
-            self._normalize(self._parse_json(parts["text"]), evidence_packet)
-            if normalize
-            else self._parse_json(parts["text"])
-        )
-        assessment["thinking"] = parts["thinking"]
-        return assessment
+    @staticmethod
+    def _trace(identity: Dict[str, Any], **fields: Any) -> None:
+        thinking_log.record(dict(identity, **fields))
 
     # ------------------------------------------------------------------
     # Response extraction
@@ -335,6 +505,33 @@ class SecurityAgent:
     # ------------------------------------------------------------------
     # Thinking printer
     # ------------------------------------------------------------------
+
+    @classmethod
+    def _emit_thinking(cls, chunk: str, identity: Optional[Dict[str, Any]] = None) -> None:
+        """Show reasoning on stderr according to ``LLM_THINKING_PRINT``.
+
+        ``off`` (silent, the default for benchmark runs), ``short`` (one
+        line: role, size and the first words) or ``full`` (the framed box).
+        The full trace is always written to ``LLM_THINKING_OUT`` regardless of
+        this setting, so a quiet terminal never costs evidence.
+        """
+        mode = (os.getenv("LLM_THINKING_PRINT") or "").strip().lower()
+        if mode in {"off", "none", "0", "false", "no", "silent", "quiet"}:
+            return
+        if mode in {"full", "box", "all", "1", "true"}:
+            cls._thinking_printer(chunk)
+            return
+
+        flat = " ".join((chunk or "").split())
+        if not flat:
+            return
+        head = flat[:140] + ("…" if len(flat) > 140 else "")
+        role = str((identity or {}).get("role") or "llm")
+        target = identity.get("id") if identity else None
+        if isinstance(target, str) and target:
+            target = Path(target).name
+        label = f"{role}|{target}" if target else role
+        print(f"  thinking[{label}] {len(chunk)}c: {head}", file=sys.stderr, flush=True)
 
     @staticmethod
     def _thinking_printer(chunk: str) -> None:

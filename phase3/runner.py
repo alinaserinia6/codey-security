@@ -31,6 +31,20 @@ def _truncate(text: str, width: int) -> str:
     return text if len(text) <= width else text[: width - 3] + "..."
 
 
+def emit_errors(sample_id: str, errors, *, stream=None) -> None:
+    """Print one sample's errors to the terminal as they happen.
+
+    Errors used to live only inside the output JSON, so a run that scored
+    every sample as failed looked identical on the terminal to a clean
+    one. Each line carries the sample id and the full error text.
+    """
+    if not errors:
+        return
+    out = stream or sys.stderr
+    for err in errors:
+        print(f"ERROR {sample_id}: {err}", file=out, flush=True)
+
+
 class ProgressReporter:
     """Thread-safe one-line-per-sample progress on stderr."""
 
@@ -109,7 +123,8 @@ def run_phase1_benchmark(
                     "reason": "missing file",
                 }
                 if reporter:
-                    reporter.step(sample.sample_id, extra="skip: missing file")
+                    reporter.step(sample.sample_id,
+                                  extra=f"skip: missing file {path}")
                 continue
             raise FileNotFoundError(path)
         jobs.append((i, sample, path))
@@ -140,10 +155,12 @@ def run_phase1_benchmark(
             except Exception as exc:  # noqa: BLE001 - defensive; _analyze_one already isolates
                 continue
             reports_by_index[idx] = {"sample_id": sample.sample_id, "report": report}
+            emit_errors(sample.sample_id, report.get("errors"))
             if reporter:
                 reporter.step(
                     sample.sample_id,
-                    extra=f"findings={len(report.get('findings', []))}",
+                    extra=f"file={report.get('source', path)} "
+                          f"findings={len(report.get('findings', []))}",
                 )
 
     # Reassemble in dataset order so the manifest and reports line up.
@@ -234,6 +251,7 @@ async def _run_phase2_benchmark_async(
             except Exception as exc:  # noqa: BLE001 - defensive; _analyze_one already isolates
                 continue
             phase1_by_index[index] = report
+            emit_errors(samples[index].sample_id, report.get("errors"))
             if reporter:
                 reporter.step(
                     samples[index].sample_id,
@@ -260,6 +278,7 @@ async def _run_phase2_benchmark_async(
                     "errors": [f"{type(exc).__name__}: {exc}"],
                     "metadata": {"input_group_count": 0, "analysis_failed": True},
                 }
+        emit_errors(sample.sample_id, phase2.get("errors"))
         async with state["lock"]:
             state["i"] += 1
             counts = phase2.get("metadata", {}).get("decision_counts", {})
@@ -267,9 +286,11 @@ async def _run_phase2_benchmark_async(
             state["rejected"] += counts.get("REJECTED", 0)
             state["uncertain"] += counts.get("UNCERTAIN", 0)
             if reporter2:
+                src = str(phase2.get("source", report.get("source", "<unknown>")))
                 reporter2.step(
                     sample.sample_id,
                     extra=(
+                        f"file={src} "
                         f"groups={phase2.get('metadata', {}).get('input_group_count', 0)}  "
                         f"C={state['confirmed']} R={state['rejected']} U={state['uncertain']}"
                     ),

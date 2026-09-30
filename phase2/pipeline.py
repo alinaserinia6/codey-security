@@ -5,6 +5,8 @@ import json
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from agents import thinking_log
+
 from .context import load_source_context
 from .llm import Phase2LLM
 from .models import AgentAssessment, FinalDecision, Phase2Report
@@ -120,12 +122,13 @@ class Phase2Pipeline:
             packet = sanitize_value(packet)
 
             try:
-                value = await self.llm.ask_json(
-                    system="",
-                    prompt=json.dumps(
-                        packet, ensure_ascii=False, indent=2, default=str
-                    ),
-                )
+                with thinking_log.scope(id=source, file=source, role="security"):
+                    value = await self.llm.ask_json(
+                        system="",
+                        prompt=json.dumps(
+                            packet, ensure_ascii=False, indent=2, default=str
+                        ),
+                    )
                 assessment = self._assessment_from_result(value, group)
                 cwe = (
                     self._string_list(value.get("cwe"))

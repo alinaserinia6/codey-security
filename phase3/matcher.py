@@ -148,16 +148,26 @@ def match_score(pred: Prediction, gt: GroundTruth, cfg: MatchConfig) -> Tuple[fl
     score = 0.4
 
     # --- CWE policy -----------------------------------------------------
-    # When the ground truth names a CWE, the prediction must share its family.
-    # A CWE-less prediction cannot be credited as a match: otherwise every
-    # style/quality warning in the same file would count as a true positive.
+    # When the ground truth names a CWE, the prediction must share its
+    # family. A CWE-less prediction cannot be credited as a match: otherwise
+    # every style/quality warning in the same file would count as a true
+    # positive. That absence check is unconditional.
+    #
+    # The *agreement* half is optional: `require_cwe_when_available=False`
+    # (the `--no-cwe-match` flag, `SCENARIO_PHASE3_REQUIRE_CWE=false`) means
+    # file + line alone decide. The field used to be read from config and
+    # echoed into the report, but never reached this function, so the flag
+    # silently did nothing.
     if gt.cwe:
         if not pred.cwe:
             return 0.0, "prediction has no CWE; cannot match CWE-bearing ground truth"
-        if not _cwes_match(pred.cwe, gt.cwe):
-            return 0.0, "CWE mismatch (no shared family)"
-        score += 0.25
-        reasons.append("CWE overlap")
+        if cfg.require_cwe_when_available:
+            if not _cwes_match(pred.cwe, gt.cwe):
+                return 0.0, "CWE mismatch (no shared family)"
+            score += 0.25
+            reasons.append("CWE overlap")
+        else:
+            reasons.append("CWE check disabled")
 
     # --- Line policy ----------------------------------------------------
     if gt.line is not None and pred.line is not None:

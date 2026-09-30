@@ -25,7 +25,6 @@ def main() -> None:
     parser.add_argument("--skip-missing", action="store_true")
     parser.add_argument("--line-tolerance", type=int, default=5)
     parser.add_argument("--no-cwe-match", action="store_true")
-    parser.add_argument("--no-clang", action="store_true")
     args = parser.parse_args()
 
     dataset = GroundTruthDataset.from_json(args.manifest)
@@ -35,16 +34,46 @@ def main() -> None:
     predictions = []
     reports = []
     for sample in dataset:
-        path = dataset.resolve_file(sample)
+        try:
+            path = dataset.resolve_file(sample)
+        except Exception as exc:  # noqa: BLE001 - one bad sample must not stop the run
+            reports.append(
+                {
+                    "sample_id": sample.sample_id,
+                    "skipped": True,
+                    "reason": f"unresolvable path: {type(exc).__name__}: {exc}",
+                    "file": sample.file,
+                }
+            )
+            continue
         if not path.exists():
             if args.skip_missing:
                 reports.append({"sample_id": sample.sample_id, "skipped": True, "reason": "missing file", "file": str(path)})
                 continue
             raise FileNotFoundError(path)
-        report = pipeline.analyze_file(path, run_clang=not args.no_clang)
+        try:
+            report = pipeline.analyze_file(path)
+        except Exception as exc:  # noqa: BLE001 - one bad file must not stop the run
+            reports.append(
+                {
+                    "sample_id": sample.sample_id,
+                    "skipped": True,
+                    "reason": f"analysis failed: {type(exc).__name__}: {exc}",
+                    "file": str(path),
+                }
+            )
+            continue
         reports.append({"sample_id": sample.sample_id, "report": report})
         from phase3.extract_predictions import predictions_from_phase1
-        predictions.extend(predictions_from_phase1(report, sample.sample_id))
+        try:
+            predictions.extend(predictions_from_phase1(report, sample.sample_id))
+        except Exception as exc:  # noqa: BLE001 - one malformed report must not stop the run
+            reports[-1] = {
+                "sample_id": sample.sample_id,
+                "skipped": True,
+                "reason": f"prediction extraction failed: {type(exc).__name__}: {exc}",
+                "file": str(path),
+            }
 
     elapsed = time.perf_counter() - start
     result = evaluate(

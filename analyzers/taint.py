@@ -991,7 +991,20 @@ def taint_chains_for(
 #: say about it, so the absence of a chain is not evidence against it.
 TAINT_MODELLED_CWES = frozenset(CWE_FOR_CATEGORY.values())
 
+#: Sibling ids that name the same buffer-overflow write shape the engine
+#: models under CWE-120. Juliet labels heap cases CWE-122 (and CWE-787 for
+#: out-of-bounds writes) while Flawfinder reports the CWE-119 umbrella, so
+#: without these aliases a CONFIRMED heap-overflow verdict would slip past
+#: the chain-evidence gate that the design requires for modelled classes.
+#: Buffer over-READS (CWE-125/126/127) are deliberately excluded: the engine
+#: tracks data reaching a dangerous write sink, not data read out of bounds.
+TAINT_MODELLED_ALIASES = frozenset({
+    "CWE-118", "CWE-119", "CWE-121", "CWE-122", "CWE-123", "CWE-124",
+    "CWE-131", "CWE-787", "CWE-788",
+})
+
 
 def taint_modelled(cwe: str) -> bool:
     """Whether ``cwe`` is a class this engine models as a data flow."""
-    return str(cwe or "").strip().upper() in TAINT_MODELLED_CWES
+    normalized = str(cwe or "").strip().upper()
+    return normalized in TAINT_MODELLED_CWES or normalized in TAINT_MODELLED_ALIASES

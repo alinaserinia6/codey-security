@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from agents.security_agent import SecurityAgent  # noqa: E402
+from agents import thinking_log  # noqa: E402
 from env_config import get_config  # noqa: E402  (loads .env, like every other entry point)
 from phase2.sanitize import sanitize_source  # noqa: E402
 from phase3.dataset import GroundTruthDataset  # noqa: E402
@@ -39,6 +41,12 @@ You are a standalone source-code vulnerability detector.
 You will receive one complete source file as JSON: the language and the full
 file text. Nothing else is known about the file: no static-analysis findings,
 no compiler output, no caller context.
+
+Rules for the input:
+- The file text is inlined in this message. You have no file-system, shell or
+  search tools in this session: never try to open, locate, list or read a file,
+  and never claim a file is missing — everything you get is what exists.
+- The "file" field is only a name for reference; it is not a path you can open.
 
 Decide whether the file contains at least one real, demonstrable security
 vulnerability that a reviewer would file as a defect (memory-safety error,
@@ -88,6 +96,18 @@ def _language(path: str) -> str:
     return _LANGUAGE_BY_EXT.get(ext, "unknown")
 
 
+def thinking_out_path(out: str, explicit: "str | None" = None) -> str:
+    """Sidecar reasoning trace for one predictions file.
+
+    ``results/exp_B.jsonl`` -> ``results/exp_B.thinking.json``, so the trace
+    always sits next to the run it documents and ``--resume`` keeps appending
+    to the same file.
+    """
+    if explicit:
+        return explicit
+    return str(Path(out).with_suffix("")) + ".thinking.json"
+
+
 def _line_from_location(location) -> "int | None":
     if not isinstance(location, str) or ":" not in location:
         return None
@@ -97,6 +117,21 @@ def _line_from_location(location) -> "int | None":
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+def _safe_confidence(value) -> float:
+    try:
+        return max(0.0, min(1.0, float(value or 0.0)))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_cwe_list(value) -> list:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(c) for c in value if c]
+    return [str(value)]
 
 
 async def _judge(agent: SecurityAgent, sem: asyncio.Semaphore, sample: dict) -> dict:
@@ -116,11 +151,12 @@ async def _judge(agent: SecurityAgent, sem: asyncio.Semaphore, sample: dict) -> 
         "model": agent.model_id,
         "base_url": agent.base_url,
     }
-    started = time.monotonic()
+    started = time.monotonic()  # only used on the read-failure path below
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         record["error"] = f"read failed: {exc}"
+        record["elapsed"] = round(time.monotonic() - started, 2)
         return record
 
     packet = {
@@ -129,21 +165,44 @@ async def _judge(agent: SecurityAgent, sem: asyncio.Semaphore, sample: dict) -> 
         "source": sanitize_source(text, record["language"], path=str(path)),
     }
     async with sem:
+        # Timed from here, not from the start of _judge: with 4 workers the
+        # queue wait of the last samples dwarfs the request itself, and
+        # `elapsed` is summed into the evaluation's request-seconds figure.
+        started = time.monotonic()
         try:
-            value = await agent.analyze(packet, system_prompt=LLM_ONLY_PROMPT)
-        except Exception as exc:  # noqa: BLE001
+            # The scope tells the transport which sample this reply belongs to,
+            # so the sidecar thinking log ends up keyed by sample_id + real path
+            # rather than by the neutral "sample.c" name inside the packet.
+            with thinking_log.scope(
+                id=sample["sample_id"], file=str(path), role="llm_only"
+            ):
+                value = await agent.analyze(packet, system_prompt=LLM_ONLY_PROMPT)
+        except Exception as exc:  # noqa: BLE001 - one bad LLM reply must not stop the run
             record["error"] = f"{type(exc).__name__}: {exc}"
             record["elapsed"] = round(time.monotonic() - started, 2)
             return record
 
-    record["decision"] = str(value.get("decision", "UNCERTAIN")).upper()
-    record["cwe"] = [str(c) for c in (value.get("cwe") or [])]
-    record["line"] = _line_from_location(value.get("source_location"))
-    record["confidence"] = float(value.get("confidence") or 0.0)
-    record["severity"] = str(value.get("severity") or "UNKNOWN").upper()
-    record["rationale"] = str(value.get("rationale") or "")
-    record["elapsed"] = round(time.monotonic() - started, 2)
-    return record
+        # The model reply is untrusted: a non-dict, a numeric confidence as
+        # text ("high"), or a line as a string must degrade to an ERROR
+        # record, never to an exception that kills the whole benchmark.
+        try:
+            if not isinstance(value, dict):
+                raise ValueError(
+                    f"expected a JSON object, got {type(value).__name__}"
+                )
+            record["decision"] = str(value.get("decision", "UNCERTAIN")).upper()
+            if record["decision"] not in {"CONFIRMED", "REJECTED", "UNCERTAIN"}:
+                record["decision"] = "UNCERTAIN"
+            record["cwe"] = _safe_cwe_list(value.get("cwe"))
+            record["line"] = _line_from_location(value.get("source_location"))
+            record["confidence"] = _safe_confidence(value.get("confidence"))
+            record["severity"] = str(value.get("severity") or "UNKNOWN").upper()
+            record["rationale"] = str(value.get("rationale") or "")
+        except Exception as exc:  # noqa: BLE001
+            record["decision"] = "ERROR"
+            record["error"] = f"unparsable model reply: {type(exc).__name__}: {exc}"
+        record["elapsed"] = round(time.monotonic() - started, 2)
+        return record
 
 
 async def run(args) -> None:
@@ -166,6 +225,15 @@ async def run(args) -> None:
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Sidecar reasoning trace: one JSON file, one entry per judged sample, so
+    # "what did the model actually see and think?" survives the run.
+    os.environ.setdefault(
+        thinking_log.ENV_OUT, thinking_out_path(str(out_path), args.thinking_out)
+    )
+    # Quiet terminal: the progress lines are the useful output here. Export
+    # LLM_THINKING_PRINT=short/full to watch the reasoning live as well.
+    os.environ.setdefault("LLM_THINKING_PRINT", "off")
+
     done: set[str] = set()
     if args.resume and out_path.exists():
         for line in out_path.read_text(encoding="utf-8").splitlines():
@@ -184,6 +252,7 @@ async def run(args) -> None:
 
     todo = [s for s in samples if s["sample_id"] not in done]
     print(f"{len(todo)} samples to judge ({len(samples)} total)")
+    print(f"Thinking log: {os.environ.get(thinking_log.ENV_OUT, '(disabled)')}")
 
     cfg = get_config()
     agent = SecurityAgent(
@@ -195,9 +264,14 @@ async def run(args) -> None:
         reuse_session=cfg.llm_reuse_session,
     )
     print(
-        f"Model: {agent.model_id}  provider: {agent.provider_id}  "
+        f"Model: {agent.model_id}  transport: {agent.transport}  "
         f"base_url: {agent.base_url}  timeout: {agent.timeout}s"
     )
+    if agent.transport == "openai":
+        print(
+            "  api key: "
+            + ("set" if os.environ.get("LLM_API_KEY") else "NOT SET (LLM_API_KEY)")
+        )
     sem = asyncio.Semaphore(args.concurrency)
     reporter_lock = asyncio.Lock()
     state = {"i": 0, "errors": 0, "confirmed": 0, "start": time.monotonic()}
@@ -205,7 +279,30 @@ async def run(args) -> None:
     out_file = out_path.open("a", encoding="utf-8")
 
     async def one(sample: dict) -> None:
-        record = await _judge(agent, sem, sample)
+        # Console only, never written to the JSONL: shows which file is about
+        # to be judged (and whether it even exists) before the LLM call.
+        async with reporter_lock:
+            missing = "" if Path(sample.get("file", "")).is_file() else "  MISSING!"
+            print(f"judge {sample.get('sample_id', '<unknown>')}\n"
+                  f"  file {sample.get('file', '')}{missing}", flush=True)
+        try:
+            record = await _judge(agent, sem, sample)
+        except Exception as exc:  # noqa: BLE001 - defensive; _judge already isolates
+            record = {
+                "sample_id": sample.get("sample_id", "<unknown>"),
+                "file": str(sample.get("file", "")),
+                "language": "unknown",
+                "decision": "ERROR",
+                "cwe": [],
+                "line": None,
+                "confidence": 0.0,
+                "severity": "UNKNOWN",
+                "rationale": "",
+                "error": f"harness failure: {type(exc).__name__}: {exc}",
+                "elapsed": 0.0,
+                "model": agent.model_id,
+                "base_url": agent.base_url,
+            }
         async with reporter_lock:
             out_file.write(json.dumps(record, ensure_ascii=False) + "\n")
             out_file.flush()
@@ -227,7 +324,7 @@ async def run(args) -> None:
             )
 
     try:
-        await asyncio.gather(*(one(s) for s in todo))
+        await asyncio.gather(*(one(s) for s in todo), return_exceptions=True)
     finally:
         out_file.close()
 
@@ -252,9 +349,36 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base-url", default=None, help="override LLM_BASE_URL for this run")
     p.add_argument("--limit", type=int, default=0)
     p.add_argument("--shuffle-seed", type=int, default=None)
+    p.add_argument(
+        "--thinking-out",
+        default=None,
+        help="JSON file that collects every model reasoning trace for this run "
+             "(default: <out>.thinking.json; honours LLM_THINKING_OUT)",
+    )
     p.add_argument("--resume", action="store_true")
     return p
 
 
+def validate_args(args) -> None:
+    """Fail fast on knobs that would otherwise hang or silently mis-run.
+
+    ``--concurrency 0`` deadlocks the semaphore, a negative ``--limit``
+    slices from the end of the dataset, and a non-positive ``--timeout``
+    fails every request immediately. All three come from typos, so they
+    are hard errors, not clamps.
+    """
+    if args.concurrency < 1:
+        raise ValueError(f"--concurrency must be >= 1, got {args.concurrency}")
+    if args.limit < 0:
+        raise ValueError(f"--limit must be >= 0, got {args.limit}")
+    if args.timeout is not None and not args.timeout > 0:
+        raise ValueError(f"--timeout must be > 0, got {args.timeout}")
+
+
 if __name__ == "__main__":
-    asyncio.run(run(build_parser().parse_args()))
+    _args = build_parser().parse_args()
+    try:
+        validate_args(_args)
+    except ValueError as exc:
+        build_parser().error(str(exc))
+    asyncio.run(run(_args))

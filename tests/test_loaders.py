@@ -15,11 +15,16 @@ import pytest
 from phase3.loaders import (
     FunctionCorpusOptions,
     LoaderError,
+    RealWorldOptions,
     SardOptions,
+    VulnLLMROptions,
     load_big_vul,
+    load_bigvul_hf,
     load_devign,
     load_function_corpus,
+    load_primevul,
     load_sard,
+    load_vulnllm_r,
     write_manifest,
 )
 
@@ -308,3 +313,218 @@ def test_manifest_round_trips_through_the_dataset_reader(tmp_path):
 def test_write_manifest_creates_parent_directories(tmp_path):
     path = write_manifest({"dataset": {}, "samples": []}, tmp_path / "a" / "b" / "m.json")
     assert path.is_file()
+
+
+# -- PrimeVul / Big-Vul HF layouts ------------------------------------------
+#
+# These pin the real Hugging Face schemas (PrimeVul JSONL with a ``cwe`` list,
+# Big-Vul rows with ``func_before``/``func_after``/``vul``/``CWE ID``), which
+# the legacy ``func``/``target`` loader cannot read. The properties under test:
+# good and bad stay separate (variants + balanced classes), empty sources are
+# refused rather than scored as benign, and only selected samples get files.
+
+PRIMEVUL_ROWS = [
+    {"idx": 1, "project": "proj", "commit_id": "aaa",
+     "func": "void bad(){strcpy(d,s);}", "target": 1,
+     "cwe": ["CWE-120"], "cve": "CVE-2020-0001"},
+    {"idx": 2, "project": "proj", "commit_id": "aaa",
+     "func": "void good(){snprintf(d,4,\"%s\",s);}", "target": 0,
+     "cwe": ["CWE-120"], "cve": "CVE-2020-0001"},
+    {"idx": 3, "project": "proj", "commit_id": "bbb",
+     "func": "   ", "target": 1, "cwe": ["CWE-190"], "cve": ""},
+    {"idx": 4, "project": "proj", "commit_id": "ccc",
+     "func": "void mystery(){return;}", "target": 1, "cwe": [], "cve": ""},
+]
+
+
+def write_jsonl(path: Path, rows: list) -> None:
+    import json as _json
+
+    path.write_text("\n".join(_json.dumps(r) for r in rows) + "\n")
+
+
+def test_primevul_separates_good_and_bad(tmp_path):
+    corpus = tmp_path / "pv.jsonl"
+    write_jsonl(corpus, PRIMEVUL_ROWS)
+    payload = load_primevul(
+        corpus, out_dir=tmp_path / "fn", options=RealWorldOptions(relative_to=tmp_path)
+    )
+    by_id = {s["sample_id"]: s for s in payload["samples"]}
+    assert by_id["primevul_1_bad"]["vulnerable"] is True
+    assert by_id["primevul_1_bad"]["cwe"] == ["CWE-120"]
+    assert by_id["primevul_1_bad"]["variant"] == "bad"
+    assert by_id["primevul_2_good"]["vulnerable"] is False
+    assert by_id["primevul_2_good"]["variant"] == "good"
+    assert payload["dataset"]["vulnerable_count"] == 1
+    assert payload["dataset"]["benign_count"] == 1
+
+
+def test_primevul_refuses_empty_and_cweless_vulnerable(tmp_path):
+    """An empty function is a missing sample, not a benign one; a vulnerable
+    row without a CWE is left out rather than guessed at."""
+    corpus = tmp_path / "pv.jsonl"
+    write_jsonl(corpus, PRIMEVUL_ROWS)
+    payload = load_primevul(corpus, out_dir=tmp_path / "fn")
+    assert payload["dataset"]["skipped_empty"] == 1
+    assert payload["dataset"]["skipped_no_cwe"] == 1
+    assert len(payload["samples"]) == 2
+
+
+def test_primevul_writes_files_only_for_selected_samples(tmp_path):
+    corpus = tmp_path / "pv.jsonl"
+    rows = [
+        {"idx": i, "project": "p", "commit_id": "c",
+         "func": f"void f{i}(){{return;}}", "target": 0, "cwe": [], "cve": ""}
+        for i in range(6)
+    ] + [PRIMEVUL_ROWS[0]]
+    write_jsonl(corpus, rows)
+    payload = load_primevul(corpus, out_dir=tmp_path / "fn")
+    # 1 vulnerable vs 6 benign -> balanced down to 1+1.
+    assert len(payload["samples"]) == 2
+    assert len(list((tmp_path / "fn").glob("*.c"))) == 2
+    for sample in payload["samples"]:
+        assert (tmp_path / "fn" / Path(sample["file"]).name).is_file()
+
+
+def test_primevul_relative_paths_resolve_from_the_manifest_dir(tmp_path):
+    from phase3.dataset import GroundTruthDataset
+
+    corpus = tmp_path / "pv.jsonl"
+    write_jsonl(corpus, PRIMEVUL_ROWS[:2])
+    manifest_dir = tmp_path / "ds"
+    manifest_dir.mkdir()
+    payload = load_primevul(
+        corpus,
+        out_dir=manifest_dir / "pv_functions",
+        options=RealWorldOptions(relative_to=manifest_dir),
+    )
+    path = write_manifest(payload, manifest_dir / "pv.json")
+    dataset = GroundTruthDataset.from_json(path)
+    assert len(dataset) == 2
+    for sample in dataset:
+        assert dataset.resolve_file(sample).is_file()
+        assert not Path(sample.file).is_absolute()
+
+
+BIGVUL_ROWS = [
+    {"project": "x", "commit_id": "c1", "vul": 1, "CWE ID": "CWE-119",
+     "CVE ID": "CVE-2020-0002",
+     "func_before": "void f(char*s){strcpy(d,s);}",
+     "func_after": "void f(char*s){snprintf(d,4,\"%s\",s);}"},
+    {"project": "y", "commit_id": "c2", "vul": 0, "CWE ID": "",
+     "CVE ID": "", "func_before": "void g(){return;}", "func_after": ""},
+]
+
+
+def test_bigvul_hf_emits_a_fix_twin_for_vulnerable_rows(tmp_path):
+    corpus = tmp_path / "bv.json"
+    corpus.write_text(json.dumps(BIGVUL_ROWS))
+    payload = load_bigvul_hf(
+        corpus, out_dir=tmp_path / "fn",
+        options=RealWorldOptions(balanced=False),
+    )
+    variants = sorted(
+        (s["variant"], s["vulnerable"]) for s in payload["samples"]
+    )
+    assert ("bad", True) in variants
+    assert ("good", False) in variants
+    bad = next(s for s in payload["samples"] if s["variant"] == "bad")
+    assert bad["cwe"] == ["CWE-119"]
+    assert bad["group_id"] == "x_c1"
+    twin = next(
+        s for s in payload["samples"]
+        if s["variant"] == "good" and s["group_id"] == "x_c1"
+    )
+    assert "snprintf" in Path(twin["file"]).read_text()
+
+
+def test_bigvul_hf_without_fix_twin_uses_benign_rows(tmp_path):
+    corpus = tmp_path / "bv.json"
+    corpus.write_text(json.dumps(BIGVUL_ROWS))
+    payload = load_bigvul_hf(
+        corpus, out_dir=tmp_path / "fn",
+        options=RealWorldOptions(balanced=False, include_fix_as_benign=False),
+    )
+    assert sorted(s["vulnerable"] for s in payload["samples"]) == [False, True]
+
+
+def test_bigvul_hf_cwe_filter_and_limit(tmp_path):
+    corpus = tmp_path / "bv.json"
+    corpus.write_text(json.dumps(BIGVUL_ROWS))
+    payload = load_bigvul_hf(
+        corpus, out_dir=tmp_path / "fn",
+        options=RealWorldOptions(cwe_filter=["CWE-119"], limit=1),
+    )
+    assert len(payload["samples"]) == 1
+    assert payload["dataset"]["cwe_filter"] == ["CWE-119"]
+
+
+def test_bigvul_hf_rejects_mislabelled_rows(tmp_path):
+    corpus = tmp_path / "bv.json"
+    corpus.write_text(json.dumps(
+        [{"project": "x", "vul": 1, "CWE ID": "", "func_before": "void f(){}"}]
+    ))
+    with pytest.raises(LoaderError, match="no usable records"):
+        load_bigvul_hf(corpus, out_dir=tmp_path / "fn")
+
+
+# -- VulnLLM-R layout --------------------------------------------------------
+
+VULNLLM_R_ROWS = [
+    {"idx": 1, "language": "c", "function_name": "copy",
+     "code": "void copy(char*d,char*s){strcpy(d,s);}", "target": 1,
+     "CWE_ID": ["CWE-120"], "RELATED_CWE": ["CWE-119"]},
+    {"idx": 2, "language": "c", "function_name": "copy",
+     "code": "void copy(char*d,char*s){snprintf(d,4,\"%s\",s);}", "target": 0,
+     "CWE_ID": ["CWE-120"], "RELATED_CWE": ["CWE-119"]},
+    {"idx": 3, "language": "python", "function_name": "run",
+     "code": "import os\nos.system(cmd)\n", "target": 1,
+     "CWE_ID": ["CWE-78"], "RELATED_CWE": []},
+    {"idx": 4, "language": "java", "function_name": "Run",
+     "code": "void run(){exec(cmd);}", "target": 0,
+     "CWE_ID": ["CWE-78"], "RELATED_CWE": []},
+    {"idx": 5, "language": "c", "function_name": "empty",
+     "code": "  ", "target": 1, "CWE_ID": ["CWE-190"], "RELATED_CWE": []},
+]
+
+
+def test_vulnllm_r_groups_files_by_cwe_and_verdict(tmp_path):
+    corpus = tmp_path / "vr.json"
+    corpus.write_text(json.dumps(VULNLLM_R_ROWS))
+    payload = load_vulnllm_r(
+        corpus, out_dir=tmp_path / "vr",
+        options=VulnLLMROptions(languages=["c", "python", "java"],
+                                relative_to=tmp_path),
+    )
+    assert len(payload["samples"]) == 4
+    assert payload["dataset"]["skipped_empty"] == 1
+    paths = sorted(s["file"] for s in payload["samples"])
+    assert paths[0].startswith("vr/function_level/c/CWE-120/bad/")
+    assert paths[1].startswith("vr/function_level/c/CWE-120/good/")
+    assert paths[2].startswith("vr/function_level/java/CWE-78/good/")
+    assert paths[3].startswith("vr/function_level/python/CWE-78/bad/")
+    bad = next(s for s in payload["samples"] if s["variant"] == "bad")
+    assert bad["group_id"] == "CWE-120"
+    assert bad["related_cwe"] == ["CWE-119"]
+
+
+def test_vulnllm_r_leaves_java_out_of_a_scored_manifest(tmp_path):
+    """No analyzer in this project reads Java; scoring it would count every
+    sample as a miss for reasons unrelated to detection."""
+    corpus = tmp_path / "vr.json"
+    corpus.write_text(json.dumps(VULNLLM_R_ROWS))
+    payload = load_vulnllm_r(corpus, out_dir=tmp_path / "vr")
+    assert payload["dataset"]["languages"] == ["c", "python"]
+    assert payload["dataset"]["skipped_language"] == 1
+    assert {s["language"] for s in payload["samples"]} == {"c", "python"}
+
+
+def test_vulnllm_r_suffix_follows_language(tmp_path):
+    corpus = tmp_path / "vr.json"
+    corpus.write_text(json.dumps(VULNLLM_R_ROWS))
+    payload = load_vulnllm_r(
+        corpus, out_dir=tmp_path / "vr",
+        options=VulnLLMROptions(languages=["c", "python"]),
+    )
+    suffixes = {Path(s["file"]).suffix for s in payload["samples"]}
+    assert suffixes == {".c", ".py"}

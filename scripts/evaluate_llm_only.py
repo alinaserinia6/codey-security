@@ -35,24 +35,39 @@ from phase3.models import Prediction  # noqa: E402
 from phase3.report import save_result  # noqa: E402
 
 
+#: Human-readable descriptions of lines skipped by the last load_records call.
+LOAD_WARNINGS: List[str] = []
+
+
 def load_records(path: Path) -> List[dict]:
     """Read the JSONL, keeping one record per sample.
 
     An interrupted run appends duplicates when it is resumed, so the newest
     record wins — except that a transport error never clobbers an existing
     successful judgement.
+
+    A corrupt line or a record without a sample_id is skipped with a
+    warning: one bad line in a 4000-line file must not discard the other
+    3999 judgements. Skipped lines are counted in ``LOAD_WARNINGS``.
     """
+    LOAD_WARNINGS.clear()
     by_id: Dict[str, dict] = {}
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise FileNotFoundError(f"predictions file not readable: {path}: {exc}") from exc
+    for lineno, line in enumerate(text.splitlines(), 1):
         line = line.strip()
         if not line:
             continue
         try:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
-            raise ValueError(f"{path}:{lineno}: invalid JSON ({exc})") from exc
-        if "sample_id" not in record:
-            raise ValueError(f"{path}:{lineno}: record has no sample_id")
+            LOAD_WARNINGS.append(f"{path}:{lineno}: invalid JSON, skipped ({exc})")
+            continue
+        if not isinstance(record, dict) or "sample_id" not in record:
+            LOAD_WARNINGS.append(f"{path}:{lineno}: record has no sample_id, skipped")
+            continue
         sample_id = str(record["sample_id"])
         previous = by_id.get(sample_id)
         if (
@@ -62,7 +77,36 @@ def load_records(path: Path) -> List[dict]:
         ):
             continue
         by_id[sample_id] = record
+    for warning in LOAD_WARNINGS[:10]:
+        print(f"warning: {warning}", file=sys.stderr)
+    if len(LOAD_WARNINGS) > 10:
+        print(f"warning: ... and {len(LOAD_WARNINGS) - 10} more bad lines", file=sys.stderr)
     return list(by_id.values())
+
+
+def _safe_int(value) -> "int | None":
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _safe_cwe_list(value) -> list:
+    if not value:
+        return []
+    if isinstance(value, str):
+        return [value]
+    try:
+        return [str(c) for c in value if c]
+    except TypeError:
+        return [str(value)]
 
 
 def build_predictions(records: List[dict], experiment: str) -> List[Prediction]:
@@ -75,10 +119,10 @@ def build_predictions(records: List[dict], experiment: str) -> List[Prediction]:
                 sample_id=str(record["sample_id"]),
                 file=str(record.get("file") or ""),
                 vulnerable=True,
-                cwe=[str(c) for c in (record.get("cwe") or [])],
-                line=int(record["line"]) if record.get("line") is not None else None,
+                cwe=_safe_cwe_list(record.get("cwe")),
+                line=_safe_int(record.get("line")),
                 status="CONFIRMED",
-                confidence=float(record.get("confidence") or 0.0),
+                confidence=_safe_float(record.get("confidence")),
                 source=experiment,
                 raw=record,
             )
@@ -130,7 +174,7 @@ def main() -> None:
         {s.sample_id for s in dataset} - {str(r["sample_id"]) for r in records}
     )
     errors = [str(r["sample_id"]) for r in records if r.get("error")]
-    elapsed = sum(float(r.get("elapsed") or 0.0) for r in records)
+    elapsed = sum(_safe_float(r.get("elapsed")) for r in records)
 
     result.metadata["provenance"] = {
         "experiment": args.experiment,
@@ -143,6 +187,7 @@ def main() -> None:
         "line_tolerance": args.line_tolerance,
         "require_cwe_match": not args.no_cwe_match,
         "record_count": len(records),
+        "skipped_bad_lines": len(LOAD_WARNINGS),
         "decision_counts": dict(decisions),
         "positive_predictions": len(predictions),
         "missing_samples": len(missing),
