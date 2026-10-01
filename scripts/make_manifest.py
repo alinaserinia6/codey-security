@@ -12,7 +12,7 @@
     python scripts/make_manifest.py big-vul --input datasets/big-vul.json \\
         --out datasets/big_vul_manifest.json
 
-The output is the same manifest format the Juliet and Python generators produce,
+The output is the same manifest format the shipped datasets use,
 so every measurement script works over all of them unchanged.
 """
 from __future__ import annotations

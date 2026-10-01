@@ -6,7 +6,7 @@ with the same matcher used for every other experiment, so the numbers stay
 comparable:
 
     python scripts/evaluate_llm_only.py \
-        --dataset datasets/juliet_test.json \
+        --dataset datasets/llm_subset_20.json \
         --predictions results/exp_B_llm_only.jsonl \
         --out results/exp_B_llm_only_eval.json
 

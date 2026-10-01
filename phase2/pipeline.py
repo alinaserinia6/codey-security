@@ -117,8 +117,8 @@ class Phase2Pipeline:
                 packet["structural"] = report.get("metadata", {}).get(
                     "structure", {}
                 )
-            # Neutralise Juliet scenario identifiers in every textual field so
-            # the agent cannot read the label out of the evidence packet.
+            # Neutralise scenario identifiers in every textual field so the
+            # agent cannot read the label out of the evidence packet.
             packet = sanitize_value(packet)
 
             try:

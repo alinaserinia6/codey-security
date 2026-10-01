@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Build a stratified evaluation subset from a Juliet manifest.
+"""Build a stratified evaluation subset from any labelled manifest.
 
-LLM experiments cost one model call per file, so a full 4,098-file run is
-several hours. This script draws a reproducible *stratified* subset: the sample
-count per (primary CWE, vulnerable) stratum is fixed, and the selection inside
-a stratum is driven by ``--seed``. Stratifying on the label keeps the positive
-and negative populations balanced, which is what makes the false-positive rate
-meaningful.
+LLM experiments cost one model call per file, so a full run over a large
+manifest is several hours. This script draws a reproducible *stratified*
+subset: the sample count per (primary CWE, vulnerable) stratum is fixed, and
+the selection inside a stratum is driven by ``--seed``. Stratifying on the
+label keeps the positive and negative populations balanced, which is what
+makes the false-positive rate meaningful.
 
 Every experiment (A/B/C/D) is then run on exactly the same subset, so the
 comparison table is not confounded by different populations.
 
 Usage:
     python scripts/make_stratified_subset.py \
-        --dataset datasets/juliet_test.json \
+        --dataset datasets/vulnllm_r_c.json \
         --out datasets/eval_subset.json \
         --per-stratum 150 --seed 42
 """

@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Materialize a real-world Hugging Face vulnerability corpus into a manifest.
 
-The old LorenzH Juliet mirror this project used is synthetic template code and
-its snippets carry no compilable context, which is why so many of its files
-score nothing under the static tools. PrimeVul and Big-Vul are real project
-code with NVD-backed CWE labels and an explicit vulnerable/fixed split, so a
-manifest built from them has the benign population a false-positive rate
-needs.
+Template-generated vulnerability corpora are synthetic and their snippets carry
+no compilable context, which is why so many of their files score nothing under
+the static tools. PrimeVul and Big-Vul are real project code with NVD-backed
+CWE labels and an explicit vulnerable/fixed split, so a manifest built from
+them has the benign population a false-positive rate needs.
 
 The script reads either a local file or a Hugging Face dataset file and writes
 one source file per function plus a Phase 3 manifest in dataset_schema.json

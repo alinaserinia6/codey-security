@@ -73,6 +73,15 @@ Secondary:
 - runtime
 - model/token cost where available
 
-## Juliet
+## Datasets in use
 
-Use Juliet C/C++ 1.3 as a principal benchmark candidate. Build an automated manifest generator rather than relying on hand-selected examples. Audit a statistically meaningful subset of generated labels before using the dataset for claims.
+Manifests shipped in `datasets/` (see the README table for counts): VulnLLM-R
+C / Python / dataflow / repository splits, PrimeVul test pairs, Big-Vul test
+split, `python_bench` (synthetic, six classes) and `proposal_min10`.
+
+Protocol for adding a corpus: import it with `scripts/make_manifest.py`
+(SARD / Devign / Big-Vul readers exist) rather than hand-writing hundreds of
+ground-truth entries, then audit a statistically meaningful subset of the
+generated labels before using the dataset for claims. `python
+scripts/run_benchmarks.py --list` reports sample and vulnerable counts for
+every manifest, so an empty or one-class import shows up before the run.

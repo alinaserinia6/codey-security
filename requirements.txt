@@ -10,9 +10,9 @@ lingling
 
 pytest>=8,<9
 
-# Benchmark corpus imports (scripts/import_hf_juliet.py, import_realworld.py,
-# and phase3.loaders tabular readers). Pinned loosely; CI and thesis runs
-# should record the exact resolved versions.
+# Benchmark corpus imports (scripts/import_realworld.py and the tabular
+# readers in phase3.loaders). Pinned loosely; CI and thesis runs should
+# record the exact resolved versions.
 pandas>=2,<4
 pyarrow>=15,<22
 datasets>=3,<4

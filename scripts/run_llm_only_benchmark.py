@@ -2,17 +2,17 @@
 """Experiment B — LLM-only baseline.
 
 The model receives one complete source file and no static-analysis evidence,
-no structural evidence and no ground-truth hints.  Every Juliet label leak
-(comments such as ``POTENTIAL FLAR``/``CWE: 190``, scenario identifiers and the
-``bad``/``good`` variant markers) is removed with :mod:`phase2.sanitize` first,
-otherwise the baseline would simply read the answer out of the file.
+no structural evidence and no ground-truth hints.  Every label leak (scenario
+comments, scenario identifiers and the ``bad``/``good`` variant markers) is
+removed with :mod:`phase2.sanitize` first, otherwise the baseline would simply
+read the answer out of the file.
 
 Each sample appends one JSON line to ``--out`` as soon as it finishes, so an
 interrupted run can still be evaluated (see ``scripts/evaluate_llm_only.py``).
 
 Usage:
     python scripts/run_llm_only_benchmark.py \
-        --dataset datasets/juliet_test.json \
+        --dataset datasets/llm_subset_20.json \
         --out results/exp_B_llm_only.jsonl \
         --concurrency 12
 """

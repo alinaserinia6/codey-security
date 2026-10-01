@@ -1,7 +1,8 @@
 PYTHON ?= python3
 
-.PHONY: help install test doctor phase1 phase2 phase3 taint-bench python-bench \
-        manifest-sard manifest-devign manifest-bigvul aggregate presentation clean
+.PHONY: help install test doctor phase1 phase2 phase3 bench taint-bench \
+        python-bench manifest-sard manifest-devign manifest-bigvul aggregate \
+        presentation clean
 
 help:
 	@echo 'Targets:'
@@ -10,7 +11,9 @@ help:
 	@echo '  phase1       static + structural report for FILE= (default examples/cpp/vulnerable.cpp)'
 	@echo '  phase2       Scanner -> Verifier report for REPORT= (default results/phase1_report.json)'
 	@echo '  phase3       evaluate MANIFEST= through the pipeline'
-	@echo '  taint-bench  source-to-sink evidence vs Flawfinder on the Juliet subset'
+	@echo '  bench        full benchmark ladder, selectable with ARGS='
+	@echo '               (make bench ARGS="--list" to see every choice)'
+	@echo '  taint-bench  source-to-sink evidence vs Flawfinder on VulnLLM-R C'
 	@echo '  python-bench source-to-sink evidence vs Bandit on the Python benchmark'
 	@echo '  manifest-*   build a Phase 3 manifest from SARD / Devign / Big-Vul'
 	@echo '  aggregate    merge the experiment JSON files into a comparison CSV'
@@ -41,9 +44,18 @@ phase2:
 phase3:
 	$(PYTHON) -m codey_security phase3
 
+# The one command for the full ladder. Everything is chosen on the command
+# line: which suites (static/taint/llm), which legs (A/B/C/D/E), which
+# datasets, which manifest the LLM subset is cut from, model, tag.
+#   make bench ARGS="--list"
+#   make bench ARGS="--suite static,taint --datasets all"
+#   make bench ARGS="--suite llm --llm-source vulnllm_r_python --llm-limit 30 --tag py30"
+bench:
+	$(PYTHON) scripts/run_benchmarks.py $(ARGS)
+
 taint-bench:
 	$(PYTHON) scripts/eval_taint_evidence.py \
-		--dataset $(or $(DATASET),datasets/eval_subset_600.json) \
+		--dataset $(or $(DATASET),datasets/vulnllm_r_c.json) \
 		--baseline flawfinder \
 		--out $(or $(OUT),results/exp_E_taint_evidence.json)
 
@@ -56,11 +68,10 @@ python-bench:
 
 aggregate:
 	$(PYTHON) scripts/aggregate_phase3.py \
-		--csv $(or $(OUT),results/table_matched_600_ABCD.csv) \
-		$(or $(RESULTS),results/exp_A_static_subset600.json \
-			results/exp_B_llm_only_eval600.json \
-			results/exp_C_static_llm_subset600.json \
-			results/exp_D_static_structural_llm_subset600.json)
+		--csv $(or $(OUT),results/comparison.csv) \
+		$(or $(RESULTS),results/exp_vulnllm_r_c_static.json \
+			results/exp_vulnllm_r_python_static.json \
+			results/exp_vulnllm_r_c_dataflow_static.json)
 
 # Convert a public corpus into the same manifest format the other benchmarks
 # use, so one evaluation harness measures all of them. CORPUS points at a

@@ -12,7 +12,7 @@ runs whichever applies and reports both side by side, because a low alarm rate
 only means something next to the rate the existing tool achieves.
 
 Usage:
-    python scripts/eval_taint_evidence.py --dataset datasets/eval_subset_600.json
+    python scripts/eval_taint_evidence.py --dataset datasets/vulnllm_r_c.json
     python scripts/eval_taint_evidence.py \
         --dataset datasets/python_bench/python_bench.json \
         --baseline bandit --out results/exp_F_python_bench.json
@@ -263,7 +263,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument(
         "--dataset",
         type=Path,
-        default=REPO_ROOT / "datasets" / "eval_subset_600.json",
+        default=REPO_ROOT / "datasets" / "vulnllm_r_c.json",
         help="labelled dataset produced by phase3.dataset",
     )
     parser.add_argument("--limit", type=int, default=None)

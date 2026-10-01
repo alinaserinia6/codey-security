@@ -162,15 +162,17 @@ codey-security/
 │
 ├── scripts/                        # reproducible benchmark entry points
 │   ├── doctor.py                   # environment check
-│   ├── generate_juliet_manifest.py # Juliet 1.3 manifest generator
-│   ├── import_hf_juliet.py         # Hugging Face Juliet import
-│   ├── split_juliet_manifest.py    # group-aware train/test split
-│   ├── run_juliet_benchmark.py     # experiment A (static tools only)
+│   ├── run_benchmarks.py           # the full ladder: --list / --dry-run /
+│   │                               #   suites + legs + dataset selection
+│   ├── filter_manifest.py          # subset / language / CWE filters
+│   ├── eval_taint_evidence.py      # experiment E (taint evidence vs tool)
+│   ├── make_stratified_subset.py   # stratified subset from any manifest
 │   ├── run_llm_only_benchmark.py   # experiment B (LLM only)
 │   └── evaluate_llm_only.py        # score experiment B with the shared matcher
 │
 ├── examples/                       # small sanity-check samples
-├── datasets/                       # benchmark manifests / Juliet integration
+├── datasets/                       # benchmark manifests (VulnLLM-R, PrimeVul,
+│                                   #   Big-Vul, Python, proposal_min10)
 ├── results/                        # generated reports (gitignored)
 ├── codey_security.py               # unified CLI
 ├── env_config.py                   # runtime configuration + scenarios
@@ -386,9 +388,9 @@ Phase 2 is powered by an OpenCode session (`LLM_BASE_URL`, `LLM_MODEL_ID`,
 `metadata.provenance`.
 
 Before any text reaches the model, `phase2/sanitize.py` removes label leaks
-from the evidence packet: Juliet comments (`CWE: 190`, `POTENTIAL FLAW`) are
-blanked in place so line numbers stay valid, and scenario identifiers such as
-`CWE190_Integer_Overflow__int_45_bad`, `badSink` and `goodG2B` are rewritten
+from the evidence packet: ground-truth comments (`CWE: 190`, `POTENTIAL FLAW`)
+are blanked in place so line numbers stay valid, and scenario identifiers such
+as `CWE190_Integer_Overflow__int_45_bad`, `badSink` and `goodG2B` are rewritten
 to stable `sym_<hash>` aliases. Without this, an LLM-only baseline would read
 the ground-truth label straight out of the file.
 
@@ -448,32 +450,63 @@ Use the same benchmark split for every experiment.
 
 ### Running them
 
-Every command reads its settings from `.env` / the environment, so override
-only what differs per experiment. Use one dataset for all four runs.
+`scripts/run_benchmarks.py` drives the whole ladder. Nothing is hard-coded:
+you choose the suites, the legs, the datasets and the manifest the LLM subset
+is cut from. Discover what is available first, dry-run it, then run:
+
+```bash
+# what can I run?  (suites, legs, datasets with sample/vuln counts, model, budget)
+python scripts/run_benchmarks.py --list
+
+# see the exact commands without executing anything
+python scripts/run_benchmarks.py --dry-run --suite all
+
+# deterministic only -- no API key needed (A on every dataset + E taint)
+python scripts/run_benchmarks.py --suite static,taint
+
+# the LLM ladder on a 60-sample subset of the C dataflow manifest (A+B+C+D)
+python scripts/run_benchmarks.py --suite llm --llm-source vulnllm_r_c_dataflow \
+  --llm-limit 60 --concurrency 4 --tag c60
+
+# judge the Python population with the model instead of only the tools
+python scripts/run_benchmarks.py --suite llm --llm-source vulnllm_r_python \
+  --llm-limit 30 --tag py30
+
+# pick individual legs inside a suite
+python scripts/run_benchmarks.py --suite llm --legs C,D --tag ablate_cd
+```
+
+Each step streams its own output as `[<step>] ...` lines, and the run ends
+with a `===== RESULT =====` block: one line per row (TP/FP/FN/TN, P, R, F1,
+elapsed time), the model, the endpoint probe and `failures=<n>`. **Copy-paste
+that block back** — analysis needs only it, not a re-run.
+
+Equivalent one-leg form, if you want to run a single experiment by hand (every
+command reads `.env` / the environment, so override only what differs):
 
 ```bash
 # A — static tools only (no LLM)
-SCENARIO_PHASE3_MODE=phase1 SCENARIO_PHASE3_DATASET=datasets/juliet_test.json \
-SCENARIO_PHASE3_OUTPUT=results/exp_A_static.json \
+SCENARIO_PHASE3_MODE=phase1 SCENARIO_PHASE3_DATASET=datasets/vulnllm_r_c.json \
+SCENARIO_PHASE3_OUTPUT=results/exp_vulnllm_r_c_static.json \
 python codey_security.py phase3
 
 # B — LLM only: one full source file, no static evidence
 python scripts/run_llm_only_benchmark.py \
-  --dataset datasets/juliet_test.json --out results/exp_B_llm_only.jsonl \
+  --dataset datasets/llm_subset_20.json --out results/exp_B_llm_only.jsonl \
   --concurrency 8 --resume
 python scripts/evaluate_llm_only.py \
-  --dataset datasets/juliet_test.json --predictions results/exp_B_llm_only.jsonl \
+  --dataset datasets/llm_subset_20.json --predictions results/exp_B_llm_only.jsonl \
   --out results/exp_B_llm_only.json
 
 # C — static findings + LLM, no structural evidence (ablation)
 PHASE2_INCLUDE_STRUCTURAL=false SCENARIO_PHASE3_MODE=phase2 \
-SCENARIO_PHASE3_DATASET=datasets/juliet_test.json \
+SCENARIO_PHASE3_DATASET=datasets/llm_subset_20.json \
 SCENARIO_PHASE3_LABEL=static_llm SCENARIO_PHASE3_OUTPUT=results/exp_C_static_llm.json \
 python codey_security.py phase3
 
 # D — static + structural evidence + LLM (proposed system)
 PHASE2_INCLUDE_STRUCTURAL=true SCENARIO_PHASE3_MODE=phase2 \
-SCENARIO_PHASE3_DATASET=datasets/juliet_test.json \
+SCENARIO_PHASE3_DATASET=datasets/llm_subset_20.json \
 SCENARIO_PHASE3_LABEL=static_structural_llm SCENARIO_PHASE3_OUTPUT=results/exp_D_full.json \
 python codey_security.py phase3
 ```
@@ -496,22 +529,27 @@ the finish timestamp.
 
 ---
 
-## Juliet integration plan
+## Benchmark datasets
 
-The intended research benchmark is **Juliet Test Suite for C/C++ 1.3**.
+All manifests live in `datasets/` in the same labelled schema
+(`dataset_schema.json`): `sample_id`, `vulnerable`, `cwe[]`, `file`, plus a
+`source` path and `language`.
 
-Recommended layout:
+| Manifest | Language | Population | Used for |
+|---|---|---|---|
+| `vulnllm_r_c.json` | C | VulnLLM-R C functions, vulnerable + benign | A, E |
+| `vulnllm_r_c_dataflow.json` | C | VulnLLM-R C with dataflow annotations | default LLM subset source |
+| `vulnllm_r_python.json` | Python | VulnLLM-R Python functions | A, E, LLM subset via `--llm-source` |
+| `vulnllm_r_repo_c.json` | C | VulnLLM-R repository-level C | A |
+| `python_bench/python_bench.json` | Python | six studied classes (synthetic) | regression harness |
+| `proposal_min10.json` | C + Python | 8–10 samples per class | proposal-aligned smoke set |
+| `primevul_test_paired.json` | C | PrimeVul test pairs | A, E |
+| `bigvul_test.json` | C | Big-Vul test split | A, E |
 
-```text
-datasets/
-└── juliet/
-    ├── manifest.json
-    └── samples/...
-```
-
-Do not hand-write hundreds of ground-truth entries. Build a deterministic
-manifest generator from Juliet's directory/file naming conventions and then
-manually audit a small validation subset.
+`python scripts/run_benchmarks.py --list` prints sample/vulnerable counts and
+languages for each of them. Do not hand-write ground-truth entries: add a new
+corpus through `scripts/make_manifest.py` (SARD / Devign / Big-Vul importers)
+and then manually audit a small validation subset before using its numbers.
 
 ---
 
@@ -540,20 +578,22 @@ For research runs:
 ## Current limitations
 
 - Phase 1 standalone Clang analysis is not yet build-system aware.
-- Juliet labels are derived from the `bad`/`good` naming convention; a manually
-  audited validation subset is still required before any published claim.
+- The principal manifests (VulnLLM-R, PrimeVul, Big-Vul) carry weak labels
+  inherited from their source corpora (patched-commit and function-level
+  heuristics), so a manually audited validation subset is still required before
+  any published claim.
 - The example manifest (`datasets/manifest.example.json`) is only a smoke
   test; it is not a research benchmark.
 - The taint tracker is intra-procedural. It recovers assignment-level
   propagation and C parameter/global origins, but not inter-procedural flows, so
   a bug whose source and sink are in different functions is out of its reach.
-- On the Juliet subset the taint tracker's recall is low. Counting any
-  source-to-sink path it gives TP 26 / FP 33 over 600 samples (recall `0.087`,
-  benign flag rate `0.110`); counting only unmitigated paths, TP 7 / FP 7
-  (recall `0.023`, benign flag rate `0.023`). The subset is roughly half C and
-  half C++, and `results/exp_E_taint_evidence.json` reports the split. Low
-  recall is expected, because the CWE-122 and CWE-190 test cases are size- and
-  allocation-mismatches rather than data flows. This is a property of the
+- Taint recall is low by construction on overflow-style bugs. On the historical
+  600-sample Juliet subset (kept in `~/.cache/results/exp_E_taint_evidence.json`,
+  no longer shipped) counting any source-to-sink path gave TP 26 / FP 33 over
+  600 samples (recall `0.087`, benign flag rate `0.110`); counting only
+  unmitigated paths, TP 7 / FP 7 (recall `0.023`, benign flag rate `0.023`).
+  Low recall is expected, because the CWE-122 and CWE-190 test cases are size-
+  and allocation-mismatches rather than data flows. This is a property of the
   benchmark, not a defect to be tuned away, and it is why taint evidence is
   used to verify injection findings rather than to detect overflow.
 - The evaluator records `per_language` and
@@ -574,9 +614,9 @@ For research runs:
 ### Devign (independent evidence)
 
 The Devign corpus (27,318 labelled C functions from qemu and FFmpeg, from
-`epicosy/devign`) is the one independent corpus evaluated so far. It is real
-project code rather than template variants, so it does not share the Juliet
-benchmark's blind spot.
+`epicosy/devign`) is one independent corpus evaluated so far. It is real
+project code rather than template variants, so it does not share the blind
+spot of template-generated benchmarks.
 
 | Set | Metric | TP | FP | FN | TN | Precision | Recall | Benign flag rate |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -643,7 +683,9 @@ markers survived, so the corpus is usable for the LLM phases as well.
 - [x] Precision/Recall/F1/FPR evaluation
 - [x] Per-CWE reporting
 - [x] Multi-experiment aggregation
-- [x] Juliet 1.3 manifest generator + group-aware train/test split
+- [x] Select-driven benchmark runner (`scripts/run_benchmarks.py`: suites,
+      legs, datasets, `--list` / `--dry-run`, per-language taint baseline)
+- [x] VulnLLM-R / PrimeVul / Big-Vul / Python benchmark manifests
 - [x] Large-scale benchmark runner (dedicated Phase-1 pool, async LLM fan-out)
 - [x] Label-leak sanitization of every LLM-visible string
 - [x] Run provenance recording (model, tool versions, settings, elapsed time)

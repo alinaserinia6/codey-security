@@ -1,22 +1,33 @@
 #!/usr/bin/env python3
-"""One-shot benchmark runner: run the whole ladder, paste back the summary.
+"""One-shot benchmark runner: choose exactly what you want, run it, paste back.
 
-The deterministic legs (A = static tools, E = taint evidence) always run.
-The LLM legs (B = LLM-only, C = static+LLM, D = full system) run only when an
-LLM endpoint answers, and only on a small subset manifest so a flaky provider
-cannot burn hours: the same subset is re-scored with static tools so every
-row stays comparable.
+Everything is selected on the command line -- which suites, which legs, which
+datasets, which manifest the LLM subset is cut from, the model and the tag --
+so the same script covers a 2-minute smoke run and the full evaluation.
+
+Legs
+    A  static tools only (Bandit / Flawfinder / cppcheck), no LLM
+    B  LLM only: one full source file, no static evidence
+    C  static findings + LLM, no structural evidence (ablation)
+    D  static findings + structural evidence + LLM (proposed system)
+    E  deterministic source-to-sink evidence vs the language's baseline tool
+
+Suites group the legs: ``static`` = A, ``llm`` = B/C/D (plus A on the same
+subset so every row is comparable), ``taint`` = E.  ``--legs`` filters inside
+a suite, e.g. ``--suite llm --legs C,D``.
+
+E picks the baseline tool from the dataset's language (C -> Flawfinder,
+Python -> Bandit); a mixed-language manifest is split per language first, so
+both populations get the tool that applies to them.
 
 Usage (run from the repo root)::
 
-    # Everything deterministic (no API key needed)
-    python scripts/run_benchmarks.py --suite static,taint
-
-    # Full ladder (needs the OpenCode server from the README)
-    python scripts/run_benchmarks.py
-
-    # Quick smoke: 30 LLM samples instead of 60
-    python scripts/run_benchmarks.py --llm-limit 30 --concurrency 2
+    python scripts/run_benchmarks.py --list
+    python scripts/run_benchmarks.py --dry-run --suite all
+    python scripts/run_benchmarks.py --suite static,taint          # no API key
+    python scripts/run_benchmarks.py --suite llm --llm-limit 30 --tag smoke30
+    python scripts/run_benchmarks.py --suite llm \\
+        --llm-source vulnllm_r_python --llm-limit 30 --tag py30
 
 At the end the script prints a RESULT block. Copy-paste that whole block back
 and the analysis can continue without re-running anything.
@@ -32,7 +43,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -44,22 +55,47 @@ import env_config  # noqa: E402,F401 -- loads .env into os.environ (no override
 
 from agents.openai_compat import resolve_transport  # noqa: E402
 
-# Short name -> (manifest, language). Keep in this order for the report.
-MANIFESTS: Dict[str, tuple] = {
-    "vulnllm_r_c": ("datasets/vulnllm_r_c.json", "c"),
-    "vulnllm_r_c_dataflow": ("datasets/vulnllm_r_c_dataflow.json", "c"),
-    "vulnllm_r_python": ("datasets/vulnllm_r_python.json", "python"),
-    "vulnllm_r_repo_c": ("datasets/vulnllm_r_repo_c.json", "c"),
-    "primevul": ("datasets/primevul_test_paired.json", "c"),
-    "bigvul": ("datasets/bigvul_test.json", "c"),
+# Short name -> manifest path, in report order.
+MANIFESTS: Dict[str, str] = {
+    "vulnllm_r_c": "datasets/vulnllm_r_c.json",
+    "vulnllm_r_c_dataflow": "datasets/vulnllm_r_c_dataflow.json",
+    "vulnllm_r_python": "datasets/vulnllm_r_python.json",
+    "vulnllm_r_repo_c": "datasets/vulnllm_r_repo_c.json",
+    "python_bench": "datasets/python_bench/python_bench.json",
+    "proposal_min10": "datasets/proposal_min10.json",
+    "primevul": "datasets/primevul_test_paired.json",
+    "bigvul": "datasets/bigvul_test.json",
 }
 
-# LLM legs run on this manifest (small enough to finish on a flaky endpoint).
-LLM_SOURCE = "datasets/vulnllm_r_c_dataflow.json"
+# The manifest the LLM legs cut their subset from. Anything in MANIFESTS can
+# be named with --llm-source, which is how the Python population gets judged
+# by the model instead of only by the deterministic tools.
+DEFAULT_LLM_SOURCE = "vulnllm_r_c_dataflow"
+
+# Which baseline tool scores a language in leg E.
+TAINT_BASELINE = {"c": "flawfinder", "python": "bandit"}
+
+LEGS = ("A", "B", "C", "D", "E")
+SUITES = ("static", "taint", "llm")
 
 
 def log(message: str) -> None:
     print(f"[bench] {message}", flush=True)
+
+
+def manifest_info(path: str) -> Tuple[int, int, List[str]]:
+    """(samples, vulnerable, languages) for a manifest, without failing a run
+    on a manifest that cannot be read -- the count is diagnostic only."""
+    try:
+        payload = json.loads((REPO_ROOT / path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return 0, 0, []
+    samples = payload.get("samples") if isinstance(payload, dict) else payload
+    if not isinstance(samples, list):
+        return 0, 0, []
+    languages = sorted({str(s.get("language") or "unknown") for s in samples})
+    vulnerable = sum(1 for s in samples if s.get("vulnerable"))
+    return len(samples), vulnerable, languages
 
 
 def run_step(name: str, argv: List[str], env: Optional[dict] = None,
@@ -174,12 +210,222 @@ def fmt_row(metrics: Optional[dict]) -> str:
     return f"{conf} P={number('precision')} R={number('recall')} F1={number('f1')}"
 
 
+def build_static_steps(names: List[str], results: Path) -> List[dict]:
+    steps = []
+    for name in names:
+        out = results / f"exp_{name}_static.json"
+        steps.append({
+            "name": f"A/{name}",
+            "leg": "A",
+            "argv": [sys.executable, "codey_security.py", "phase3"],
+            "env": {"SCENARIO_PHASE3_MODE": "phase1",
+                    "SCENARIO_PHASE3_DATASET": MANIFESTS[name],
+                    "SCENARIO_PHASE3_OUTPUT": str(out)},
+            "timeout": 3600,
+            "row": f"A static {name}",
+            "out": out,
+        })
+    return steps
+
+
+def build_taint_steps(names: List[str], results: Path) -> List[dict]:
+    """Leg E per dataset, split by language when a manifest mixes them.
+
+    The baseline tool has to be the one a developer would actually run for
+    that language, so a C manifest is scored with Flawfinder and a Python one
+    with Bandit; a mixed manifest is filtered into per-language manifests
+    first (filter_manifest keeps paths relative to datasets/, which is where
+    the sources live).
+    """
+    steps = []
+    for name in names:
+        manifest = MANIFESTS[name]
+        _, _, languages = manifest_info(manifest)
+        applicable = [lang for lang in languages if lang in TAINT_BASELINE]
+        if not applicable:
+            steps.append({
+                "name": f"E/{name}",
+                "leg": "E",
+                "skip": f"no taint table for {','.join(languages) or 'unknown'}",
+                "row": f"E taint {name}",
+            })
+            continue
+        plans: List[Tuple[str, str]] = []
+        if len(languages) == 1:
+            plans.append((manifest, applicable[0]))
+        else:
+            # Split first, then score each side with its own tool. The filter
+            # steps are appended before the eval steps below so a run never
+            # evaluates a manifest that has not been written yet.
+            for lang in applicable:
+                filtered = f"datasets/_taint_{name}_{lang}.json"
+                steps.append({
+                    "name": f"E/{name}/{lang}-filter",
+                    "leg": "E",
+                    "argv": [sys.executable, "scripts/filter_manifest.py",
+                             "--in", manifest, "--out", filtered,
+                             "--language", lang],
+                    "timeout": 600,
+                    "filter_out": filtered,
+                })
+                plans.append((filtered, lang))
+        for manifest_path, lang in plans:
+            out = (results / f"exp_{name}_taint.json" if len(languages) == 1
+                   else results / f"exp_{name}_taint_{lang}.json")
+            steps.append({
+                "name": f"E/{name}" + ("" if len(languages) == 1 else f"/{lang}"),
+                "leg": "E",
+                "argv": [sys.executable, "scripts/eval_taint_evidence.py",
+                         "--dataset", manifest_path,
+                         "--baseline", TAINT_BASELINE[lang],
+                         "--out", str(out)],
+                "timeout": 3600,
+                "row": f"E taint {name}" + ("" if len(languages) == 1 else f" [{lang}]"),
+                "out": out,
+            })
+    return steps
+
+
+def build_llm_steps(args, names: List[str], results: Path,
+                    budget: str) -> Tuple[List[dict], str, List[str]]:
+    """Steps for A-subset/B/C/D plus the subset manifest they share."""
+    source = args.llm_source
+    if source not in MANIFESTS:
+        raise SystemExit(
+            f"error: unknown --llm-source {source!r}; choose from {sorted(MANIFESTS)}"
+        )
+    subset = REPO_ROOT / "datasets" / f"llm_subset_{source}_{args.llm_limit}.json"
+    tag = args.tag or f"{source}_{args.llm_limit}"
+    summary: List[str] = [budget]
+    steps: List[dict] = [{
+        "name": "subset",
+        "leg": "B/C/D",
+        "argv": [sys.executable, "scripts/filter_manifest.py",
+                 "--in", MANIFESTS[source], "--out", str(subset),
+                 "--limit", str(args.llm_limit)],
+        "timeout": 600,
+        "summary": f"subset {source}: {args.llm_limit} samples -> {subset.name}",
+    }]
+
+    # A on the same subset, so every row is comparable.
+    if args.legs & {"A"}:
+        out_a = results / f"exp_{tag}_A_static.json"
+        steps.append({
+            "name": "A-sub", "leg": "A",
+            "argv": [sys.executable, "codey_security.py", "phase3"],
+            "env": {"SCENARIO_PHASE3_MODE": "phase1",
+                    "SCENARIO_PHASE3_DATASET": str(subset),
+                    "SCENARIO_PHASE3_OUTPUT": str(out_a)},
+            "timeout": 3600, "row": f"A static {tag}", "out": out_a,
+        })
+
+    if args.legs & {"B"}:
+        pred = results / f"exp_{tag}_B_llm_only.jsonl"
+        b_args = [sys.executable, "scripts/run_llm_only_benchmark.py",
+                  "--dataset", str(subset), "--out", str(pred),
+                  "--concurrency", str(args.concurrency),
+                  "--timeout", str(args.llm_timeout), "--resume"]
+        if args.model:
+            b_args += ["--model", args.model]
+        steps.append({
+            "name": "B", "leg": "B", "argv": b_args,
+            "env": {"LLM_THINKING_OUT":
+                    str(results / f"exp_{tag}_B_llm_only.thinking.json")},
+            "timeout": 10800,
+        })
+        be_args = [sys.executable, "scripts/evaluate_llm_only.py",
+                   "--dataset", str(subset), "--predictions", str(pred),
+                   "--out", str(results / f"exp_{tag}_B_llm_only.json")]
+        if args.model:
+            be_args += ["--model", args.model]
+        steps.append({
+            "name": "B-eval", "leg": "B", "argv": be_args, "timeout": 600,
+            "row": f"B llm-only {tag}",
+            "out": results / f"exp_{tag}_B_llm_only.json",
+            "part_of": "B",
+        })
+
+    if args.legs & {"C"}:
+        out_c = results / f"exp_{tag}_C_static_llm.json"
+        steps.append({
+            "name": "C", "leg": "C",
+            "argv": [sys.executable, "codey_security.py", "phase3"],
+            "env": {"PHASE2_INCLUDE_STRUCTURAL": "false",
+                    # The multi-agent legs size their worker pool from
+                    # PHASE2_CONCURRENCY; B honours --concurrency, and without
+                    # this C and D silently ran at 4.
+                    "PHASE2_CONCURRENCY": str(args.concurrency),
+                    "SCENARIO_PHASE3_MODE": "phase2",
+                    "SCENARIO_PHASE3_DATASET": str(subset),
+                    "SCENARIO_PHASE3_LABEL": "static_llm",
+                    "SCENARIO_PHASE3_OUTPUT": str(out_c),
+                    "LLM_THINKING_OUT":
+                        str(results / f"exp_{tag}_C_static_llm.thinking.json")},
+            "timeout": 10800, "row": f"C static+LLM {tag}", "out": out_c,
+        })
+
+    if args.legs & {"D"}:
+        out_d = results / f"exp_{tag}_D_full.json"
+        steps.append({
+            "name": "D", "leg": "D",
+            "argv": [sys.executable, "codey_security.py", "phase3"],
+            "env": {"PHASE2_INCLUDE_STRUCTURAL": "true",
+                    "PHASE2_CONCURRENCY": str(args.concurrency),
+                    "SCENARIO_PHASE3_MODE": "phase2",
+                    "SCENARIO_PHASE3_DATASET": str(subset),
+                    "SCENARIO_PHASE3_LABEL": "static_structural_llm",
+                    "SCENARIO_PHASE3_OUTPUT": str(out_d),
+                    "LLM_THINKING_OUT":
+                        str(results / f"exp_{tag}_D_full.thinking.json")},
+            "timeout": 10800, "row": f"D full {tag}", "out": out_d,
+        })
+
+    return steps, tag, summary
+
+
+def print_catalog() -> int:
+    print("suites:   static = A | taint = E | llm = B,C,D (+ A on the subset)")
+    print(f"legs:     {', '.join(LEGS)}  (pick with --legs, default: all in suite)")
+    print("datasets: --datasets name1,name2  or  --datasets all")
+    print()
+    print(f"{'name':22s} {'samples':>8s} {'vuln':>6s}  languages  manifest")
+    for name, path in MANIFESTS.items():
+        count, vulnerable, languages = manifest_info(path)
+        exists = (REPO_ROOT / path).is_file()
+        flag = "" if exists else "   [MISSING]"
+        print(f"{name:22s} {count:8d} {vulnerable:6d}  "
+              f"{','.join(languages) or '?':16s} {path}{flag}")
+    print()
+    print(f"LLM subset source: --llm-source {DEFAULT_LLM_SOURCE} "
+          f"(any dataset name above)")
+    print(f"LLM budget:        max_tokens={os.environ.get('LLM_MAX_TOKENS', '?')} "
+          f"cap={os.environ.get('LLM_MAX_TOKENS_CAP', '?')} "
+          f"temperature={os.environ.get('LLM_TEMPERATURE', '?')} "
+          f"effort={os.environ.get('LLM_REASONING_EFFORT', 'provider default')}")
+    print(f"model:             "
+          f"{os.environ.get('LLM_MODEL_ID') or os.environ.get('LLM_MODEL', '?')} "
+          f"base_url={os.environ.get('LLM_BASE_URL', '?')}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--list", action="store_true",
+                        help="print every suite, leg and dataset with its "
+                             "sample counts, then exit")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the steps that would run, execute nothing")
     parser.add_argument("--suite", default="all",
                         help="comma list of: static,taint,llm (default: all)")
+    parser.add_argument("--legs", default="all",
+                        help="comma list of legs inside the suite: "
+                             "A,B,C,D,E (default: all of them)")
     parser.add_argument("--datasets", default="all",
                         help="comma list of manifest short names or 'all'")
+    parser.add_argument("--llm-source", default=DEFAULT_LLM_SOURCE,
+                        help=f"dataset the LLM subset is cut from "
+                             f"(default: {DEFAULT_LLM_SOURCE}; use "
+                             f"vulnllm_r_python to judge the Python set)")
     parser.add_argument("--llm-limit", type=int, default=60,
                         help="samples for the LLM subset manifest (default: 60)")
     parser.add_argument("--concurrency", type=int, default=4,
@@ -197,11 +443,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                              "--model jev-1.13-free). Default: .env value.")
     parser.add_argument("--tag", default=None,
                         help="name used for the LLM output files "
-                             "(default: llm<llm-limit>). Set it to keep runs "
-                             "of a second model side by side instead of "
-                             "overwriting -- and, with --resume, mixing them "
+                             "(default: <llm-source>_<llm-limit>). Set it to "
+                             "keep runs of a second model side by side instead "
+                             "of overwriting -- and, with --resume, mixing them "
                              "into one predictions file.")
     args = parser.parse_args(argv)
+
+    if args.list:
+        return print_catalog()
 
     if args.model:
         # Exported, not just passed along: codey_security.py children read
@@ -210,65 +459,47 @@ def main(argv: Optional[List[str]] = None) -> int:
         os.environ["LLM_MODEL"] = args.model
         log(f"LLM model override: {args.model}")
 
-    suite = {s.strip() for s in args.suite.split(",")}
-    names = list(MANIFESTS) if args.datasets == "all" else args.datasets.split(",")
+    suite = {s.strip() for s in args.suite.split(",") if s.strip()}
+    unknown_suites = sorted(s for s in suite if s not in SUITES and s != "all")
+    if unknown_suites:
+        print(f"error: unknown suite(s) {unknown_suites}; choose from {SUITES}")
+        return 2
+    if args.legs.strip().lower() == "all":
+        args.legs = set(LEGS)
+    else:
+        args.legs = {p.strip().upper() for p in args.legs.split(",") if p.strip()}
+        bad = sorted(args.legs - set(LEGS))
+        if bad:
+            print(f"error: unknown leg(s) {bad}; choose from {LEGS}")
+            return 2
+
+    names = list(MANIFESTS) if args.datasets == "all" else [
+        n.strip() for n in args.datasets.split(",") if n.strip()
+    ]
     for name in names:
         if name not in MANIFESTS:
             print(f"error: unknown dataset {name!r}; choose from {sorted(MANIFESTS)}")
             return 2
+
     results = Path(args.results_dir)
-    summary: List[str] = [f"suite={args.suite} datasets={','.join(names)}"]
+    summary: List[str] = [f"suite={args.suite} legs={','.join(sorted(args.legs))} "
+                          f"datasets={','.join(names)}"]
     summary.append(
         "model="
         + (os.environ.get("LLM_MODEL_ID") or os.environ.get("LLM_MODEL", "?"))
         + f" base_url={os.environ.get('LLM_BASE_URL', '?')} "
-        f"tag={args.tag or f'llm{args.llm_limit}'}"
+        f"tag={args.tag or f'{args.llm_source}_{args.llm_limit}'}"
     )
     failures = 0
 
-    # -- A: static tools only (no LLM) -------------------------------------
-    if "all" in suite or "static" in suite:
-        for name in names:
-            manifest, _ = MANIFESTS[name]
-            out = results / f"exp_{name}_static.json"
-            ok, elapsed, tail = run_step(
-                f"A/{name}",
-                [sys.executable, "codey_security.py", "phase3"],
-                env={"SCENARIO_PHASE3_MODE": "phase1",
-                     "SCENARIO_PHASE3_DATASET": manifest,
-                     "SCENARIO_PHASE3_OUTPUT": str(out)},
-                timeout=3600,
-            )
-            status = "ok" if ok else "FAILED"
-            if not ok:
-                failures += 1
-            summary.append(f"A static {name}: {status} ({elapsed:.0f}s) "
-                           f"{fmt_row(read_metrics(out)) if ok else tail[-1]}")
-            log(f"A/{name}: {status} in {elapsed:.0f}s")
+    steps: List[dict] = []
+    if ("all" in suite or "static" in suite) and args.legs & {"A"}:
+        steps += build_static_steps(names, results)
+    if ("all" in suite or "taint" in suite) and args.legs & {"E"}:
+        steps += build_taint_steps(names, results)
 
-    # -- E: taint evidence (no LLM; C only) ---------------------------------
-    if "all" in suite or "taint" in suite:
-        for name in names:
-            manifest, language = MANIFESTS[name]
-            if language != "c":
-                summary.append(f"E taint {name}: skipped (no C taint table)")
-                continue
-            out = results / f"exp_{name}_taint.json"
-            ok, elapsed, tail = run_step(
-                f"E/{name}",
-                [sys.executable, "scripts/eval_taint_evidence.py",
-                 "--dataset", manifest, "--out", str(out)],
-                timeout=3600,
-            )
-            status = "ok" if ok else "FAILED"
-            if not ok:
-                failures += 1
-            summary.append(f"E taint {name}: {status} ({elapsed:.0f}s) "
-                           f"{fmt_row(read_metrics(out)) if ok else tail[-1]}")
-            log(f"E/{name}: {status} in {elapsed:.0f}s")
-
-    # -- B/C/D: LLM legs on a small subset ----------------------------------
-    if "all" in suite or "llm" in suite:
+    llm_planned = "all" in suite or "llm" in suite
+    if llm_planned and args.legs & {"A", "B", "C", "D"}:
         # Every LLM leg inherits one timeout: a reasoning model routinely needs
         # more than the .env default of 300s, and a timed-out sample is scored
         # as an error (a false negative) rather than as a judgement.
@@ -294,107 +525,58 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"{os.environ.get('LLM_MAX_ATTEMPTS', '2')}"
         )
         log(budget)
-        summary.append(budget)
         ok_llm, probe = llm_reachable()
         log(f"LLM endpoint: {probe}")
         summary.append(f"LLM endpoint: {probe}")
-        if not ok_llm:
-            summary.append("B/C/D: SKIPPED (no LLM server; start it per README, then re-run --suite llm)")
-        else:
-            # NOTE: the subset manifest must live next to the source manifest
-            # (datasets/), not in results/: sample `file` entries are stored
-            # relative to the manifest's own directory, so a subset written
-            # elsewhere resolves every sample to a nonexistent path.
-            subset = REPO_ROOT / "datasets" / f"llm_subset_{args.llm_limit}.json"
-            ok, _, tail = run_step(
-                "subset",
-                [sys.executable, "scripts/filter_manifest.py",
-                 "--in", LLM_SOURCE, "--out", str(subset),
-                 "--limit", str(args.llm_limit)],
-            )
+        llm_steps, _, llm_summary = build_llm_steps(args, names, results, budget)
+        if not ok_llm and not args.dry_run:
+            # The subset and its A row are deterministic, so they still run;
+            # only the steps that need the model are dropped.
+            llm_steps = [s for s in llm_steps if s.get("leg") not in {"B", "C", "D"}]
+            summary.append("B/C/D: SKIPPED (no LLM server; start it per README, "
+                           "then re-run --suite llm)")
+        elif args.dry_run and not ok_llm:
+            summary.append("B/C/D: endpoint currently unreachable "
+                           "(the steps below are still shown)")
+        steps += llm_steps
+        summary += llm_summary
+
+    if args.dry_run:
+        print("\n===== DRY RUN (nothing executed) =====")
+        for step in steps:
+            env = " ".join(f"{k}={v}" for k, v in (step.get("env") or {}).items())
+            line = f"{step['name']}: {' '.join(step['argv'])}"
+            if env:
+                line += f"   [{env}]"
+            print(line)
+            if step.get("skip"):
+                print(f"  -> skipped: {step['skip']}")
+        print("===== END DRY RUN =====")
+        return 0
+
+    for step in steps:
+        if step.get("skip"):
+            summary.append(f"{step.get('row', step['name'])}: skipped "
+                           f"({step['skip']})")
+            log(f"{step['name']}: skipped ({step['skip']})")
+            continue
+        ok, elapsed, tail = run_step(step["name"], step["argv"],
+                                     step.get("env"), step.get("timeout"))
+        if step.get("filter_out"):
             if not ok:
-                summary.append(f"subset manifest: FAILED {tail[-1]}")
                 failures += 1
-            else:
-                tag = args.tag or f"llm{args.llm_limit}"
-                # A on the same subset, so every row is comparable.
-                out_a = results / f"exp_{tag}_A_static.json"
-                ok, elapsed, tail = run_step(
-                    "A-sub", [sys.executable, "codey_security.py", "phase3"],
-                    env={"SCENARIO_PHASE3_MODE": "phase1",
-                         "SCENARIO_PHASE3_DATASET": str(subset),
-                         "SCENARIO_PHASE3_OUTPUT": str(out_a)},
-                    timeout=3600,
-                )
-                summary.append(f"A static {tag}: {'ok' if ok else 'FAILED'} "
-                               f"({elapsed:.0f}s) {fmt_row(read_metrics(out_a)) if ok else tail[-1]}")
-                # B: LLM only.
-                pred = results / f"exp_{tag}_B_llm_only.jsonl"
-                b_args = [sys.executable, "scripts/run_llm_only_benchmark.py",
-                          "--dataset", str(subset), "--out", str(pred),
-                          "--concurrency", str(args.concurrency),
-                          "--timeout", str(args.llm_timeout), "--resume"]
-                if args.model:
-                    b_args += ["--model", args.model]
-                ok, elapsed, tail = run_step(
-                    "B", b_args,
-                    env={"LLM_THINKING_OUT":
-                         str(results / f"exp_{tag}_B_llm_only.thinking.json")},
-                    timeout=10800,
-                )
-                out_b = results / f"exp_{tag}_B_llm_only.json"
-                be_args = [sys.executable, "scripts/evaluate_llm_only.py",
-                           "--dataset", str(subset), "--predictions", str(pred),
-                           "--out", str(out_b)]
-                if args.model:
-                    be_args += ["--model", args.model]
-                ok2, _, tail2 = run_step("B-eval", be_args, timeout=600)
-                good = ok and ok2
-                if not good:
-                    failures += 1
-                summary.append(f"B llm-only {tag}: {'ok' if good else 'FAILED'} "
-                               f"({elapsed:.0f}s) {fmt_row(read_metrics(out_b)) if good else (tail + tail2)[-1]}")
-                # C: static findings + LLM, no structural evidence.
-                out_c = results / f"exp_{tag}_C_static_llm.json"
-                ok, elapsed, tail = run_step(
-                    "C",
-                    [sys.executable, "codey_security.py", "phase3"],
-                    env={"PHASE2_INCLUDE_STRUCTURAL": "false",
-                         # The multi-agent legs size their worker pool from
-                         # PHASE2_CONCURRENCY; B honours --concurrency, and
-                         # without this C and D silently ran at 4.
-                         "PHASE2_CONCURRENCY": str(args.concurrency),
-                         "SCENARIO_PHASE3_MODE": "phase2",
-                         "SCENARIO_PHASE3_DATASET": str(subset),
-                         "SCENARIO_PHASE3_LABEL": "static_llm",
-                         "SCENARIO_PHASE3_OUTPUT": str(out_c),
-                         "LLM_THINKING_OUT":
-                             str(results / f"exp_{tag}_C_static_llm.thinking.json")},
-                    timeout=10800,
-                )
-                if not ok:
-                    failures += 1
-                summary.append(f"C static+LLM {tag}: {'ok' if ok else 'FAILED'} "
-                               f"({elapsed:.0f}s) {fmt_row(read_metrics(out_c)) if ok else tail[-1]}")
-                # D: static + structural evidence + LLM (proposed system).
-                out_d = results / f"exp_{tag}_D_full.json"
-                ok, elapsed, tail = run_step(
-                    "D",
-                    [sys.executable, "codey_security.py", "phase3"],
-                    env={"PHASE2_INCLUDE_STRUCTURAL": "true",
-                         "PHASE2_CONCURRENCY": str(args.concurrency),
-                         "SCENARIO_PHASE3_MODE": "phase2",
-                         "SCENARIO_PHASE3_DATASET": str(subset),
-                         "SCENARIO_PHASE3_LABEL": "static_structural_llm",
-                         "SCENARIO_PHASE3_OUTPUT": str(out_d),
-                         "LLM_THINKING_OUT":
-                             str(results / f"exp_{tag}_D_full.thinking.json")},
-                    timeout=10800,
-                )
-                if not ok:
-                    failures += 1
-                summary.append(f"D full {tag}: {'ok' if ok else 'FAILED'} "
-                               f"({elapsed:.0f}s) {fmt_row(read_metrics(out_d)) if ok else tail[-1]}")
+                summary.append(f"{step['name']}: FAILED {tail[-1]}")
+            continue
+        if not ok:
+            failures += 1
+        if step.get("row"):
+            row = (f"{step['row']}: {'ok' if ok else 'FAILED'} "
+                   f"({elapsed:.0f}s) "
+                   f"{fmt_row(read_metrics(step['out'])) if ok and step.get('out') else tail[-1]}")
+            summary.append(row)
+        elif step.get("summary"):
+            summary.append(f"{step['summary']}: {'ok' if ok else 'FAILED'}")
+        log(f"{step['name']}: {'ok' if ok else 'FAILED'} in {elapsed:.0f}s")
 
     print("\n===== RESULT (copy everything below) =====")
     for line in summary:

@@ -1,11 +1,12 @@
 """Sanitize source text before it is shown to the LLM.
 
-Juliet Test Suite samples leak their ground-truth label in three ways:
+Label-bearing benchmark samples leak their ground-truth label in three ways:
 
 1. Comments carry the annotation verbatim (``CWE: 190 Integer Overflow`` and
    ``POTENTIAL FLAW: ...``).
 2. Identifiers repeat the scenario name, which starts with the CWE number and
-   ends with the variant (``CWE190_Integer_Overflow__int_..._45_bad``).
+   ends with the variant (``CWE190_Integer_Overflow__int_..._45_bad``,
+   ``func1101_bad``).
 3. The variant markers ``bad`` / ``good`` / ``OMITBAD`` appear as plain
    function and macro names.
 
@@ -43,7 +44,7 @@ except ImportError:  # pragma: no cover
     ts_python = None
 
 
-# Identifiers that expose the scenario/CWE/variant of a Juliet sample.
+# Identifiers that expose the scenario/CWE/variant of a labelled sample.
 _LEAK_RE = re.compile(
     r"""
     \b

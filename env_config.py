@@ -151,7 +151,7 @@ def _make_scenarios() -> dict[str, ScenarioConfig]:
             output=_path(os.getenv("SCENARIO_PHASE2_OUTPUT", "results/phase2_report.json")),
         ),
         "phase3": ScenarioConfig(
-            dataset=_path(os.getenv("SCENARIO_PHASE3_DATASET", "datasets/juliet_test.json")),
+            dataset=_path(os.getenv("SCENARIO_PHASE3_DATASET", "datasets/vulnllm_r_c.json")),
             mode=os.getenv("SCENARIO_PHASE3_MODE", "phase1").lower(),
             output=_path(os.getenv("SCENARIO_PHASE3_OUTPUT", "results/phase3_result.json")),
             skip_missing=_env_bool("SCENARIO_PHASE3_SKIP_MISSING", False),

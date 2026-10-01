@@ -28,10 +28,10 @@ The default references are defined in `_make_scenarios()` inside
 ```dotenv
 SCENARIO_PHASE1_SOURCE=examples/cpp/vulnerable.cpp
 SCENARIO_PHASE2_SOURCE=examples/cpp/vulnerable.cpp
-SCENARIO_PHASE3_DATASET=datasets/juliet_test.json
+SCENARIO_PHASE3_DATASET=datasets/vulnllm_r_c.json
 SCENARIO_PHASE3_MODE=phase1
 SCENARIO_FULL_SOURCE=examples/cpp/vulnerable.cpp
-SCENARIO_FULL_DATASET=datasets/juliet_test.json
+SCENARIO_FULL_DATASET=datasets/vulnllm_r_c.json
 SCENARIO_FULL_MODE=phase2
 ```
 

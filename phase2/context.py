@@ -13,7 +13,7 @@ def load_source_context(path: str | Path, line: Optional[int], radius: int = 8) 
     except OSError as exc:
         return {"available": False, "error": str(exc), "snippet": ""}
 
-    # Comments and Juliet scenario identifiers would hand the ground-truth
+    # Comments and scenario identifiers would hand the ground-truth
     # label to the agent, so the snippet is sanitized before it is shown.
     language = None
     ext = p.suffix.lower()

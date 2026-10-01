@@ -12,7 +12,7 @@ tell that the numbers were recomputed rather than freshly measured.
 
 Usage:
     python scripts/recompute_result.py results/exp_C_static_llm_subset600.json
-    python scripts/recompute_result.py --dataset datasets/eval_subset_600.json results/*.json
+    python scripts/recompute_result.py --dataset datasets/vulnllm_r_c.json results/*.json
 """
 from __future__ import annotations
 

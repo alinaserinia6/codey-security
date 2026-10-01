@@ -11,7 +11,7 @@ This bundle contains the consolidated research core from Phases 1–3. Your exis
    `agents/verifier_agent.py` subclass `agents/security_agent.py`, so if you
    rename that module, update the two imports in them.
 4. Merge the new requirements into your existing requirements file instead of replacing it wholesale.
-5. Add the `scripts/` directory (`run_phase2.py`, `run_juliet_benchmark.py`,
+5. Add the `scripts/` directory (`run_phase2.py`, `run_benchmarks.py`,
    `run_llm_only_benchmark.py`, `eval_taint_evidence.py`,
    `aggregate_phase3.py`, `doctor.py`) and copy `data/cve_catalog.json`. The
    catalogue is loaded by absolute path from `analyzers/catalog.py`, so it has
@@ -26,6 +26,7 @@ This bundle contains the consolidated research core from Phases 1–3. Your exis
 | Phase 2, Scanner → Verifier | `python scripts/run_phase2.py results/phase1_report.json --out results/phase2_report.json` |
 | Phase 2, single-agent baseline | the same command with `--architecture single_agent` |
 | Phase 3 | `python -m codey_security phase3`, or the scripts under `scripts/` |
+| Full benchmark ladder | `python scripts/run_benchmarks.py --list` (then `--dry-run`, then run) |
 | Everything | `python -m codey_security full` |
 
 `make help` lists the same targets as short aliases.

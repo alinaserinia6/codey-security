@@ -20,7 +20,7 @@ from phase2.sanitize import (
 
 ROOT = Path(__file__).resolve().parents[1]
 
-JULIET_SAMPLE = """\
+LABEL_LEAK_SAMPLE = """\
 /* CWE190 - Integer Overflow
  * POTENTIAL FLAW: the increment can wrap around
  */
@@ -38,14 +38,14 @@ void CWE190_Integer_Overflow__int_rand_45_bad(void)
 
 
 def test_comments_are_removed_but_lines_are_kept():
-    text = strip_comments(JULIET_SAMPLE, "c", path="sample.c")
+    text = strip_comments(LABEL_LEAK_SAMPLE, "c", path="sample.c")
     assert "POTENTIAL FLAW" not in text
     assert "CWE190 - Integer Overflow" not in text
-    assert len(text.splitlines()) == len(JULIET_SAMPLE.splitlines())
+    assert len(text.splitlines()) == len(LABEL_LEAK_SAMPLE.splitlines())
 
 
 def test_scenario_identifiers_are_neutralized():
-    text = sanitize_source(JULIET_SAMPLE, "c", path="sample.c")
+    text = sanitize_source(LABEL_LEAK_SAMPLE, "c", path="sample.c")
     assert "CWE190_Integer_Overflow__int_rand_45_bad" not in text
     assert "badData" not in text
     assert "badPtr" not in text

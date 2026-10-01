@@ -247,7 +247,7 @@ def test_verifier_reads_the_real_file_when_the_path_is_sanitised(tmp_path):
     ``.../good/sample.py`` is shown to the model as ``.../sym_XXXX/sample.py``
     so the variant cannot be read off the filename. Reading the disk with that
     rewritten path raised ENOENT, so the verifier was shown an empty snippet
-    for every Juliet/VulnLLM sample and answered UNCERTAIN by default. The
+    for every label-bearing sample and answered UNCERTAIN by default. The
     packet keeps the sanitised path; the file read must use the real one.
     """
     directory = tmp_path / "good"
@@ -613,7 +613,7 @@ def test_taint_modelled_covers_the_injection_classes():
 
 
 def test_taint_modelled_covers_the_buffer_overflow_family():
-    """Juliet labels heap overflows CWE-122 while the engine files chains
+    """Benchmarks label heap overflows CWE-122 while the engine files chains
     under CWE-120; without the alias the chain gate would exempt the
     proposal's flagship C class. Over-reads stay exempt: the engine tracks
     writes to dangerous sinks, not out-of-bounds reads."""

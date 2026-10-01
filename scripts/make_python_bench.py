@@ -1,12 +1,11 @@
 """Generate a labelled Python benchmark for the vulnerability classes in scope.
 
-The proposal evaluates on Juliet for C, SARD, Devign and Big-Vul, but none of
-those cover the Python families the proposal also claims (unsafe
-deserialization, template injection, dangerous API use). Bandit is the Python
-baseline to compare against, and it needs a labelled Python corpus to be
-measured on, so this script generates one.
+The C-side corpora the proposal names do not cover the Python families it also
+claims (unsafe deserialization, template injection, dangerous API use). Bandit
+is the Python baseline to compare against, and it needs a labelled Python
+corpus to be measured on, so this script generates one.
 
-The corpus is paired Juliet-style: every scenario exists twice, as ``_bad`` and
+The corpus is paired good/bad: every scenario exists twice, as ``_bad`` and
 as ``_good``, with the same shape and the same entry point, differing only in
 whether the value reaching the sink is attacker-controlled. That pairing is
 what makes the benchmark useful for measuring false alarms, which is the
@@ -51,11 +50,12 @@ class Scenario:
 
 
 def _header(scenario: str, cwe: str, variant: str) -> str:
-    """A Juliet-style banner.
+    """The banner that carries the label on purpose.
 
-    The label is deliberately present in the source, exactly as it is in Juliet.
-    ``phase2.sanitize`` removes it before any agent sees the file, so the label
-    is recoverable by the harness and invisible to the model.
+    Each scenario is emitted twice, as ``_bad`` and as ``_good``, and the
+    header names the variant, so a baseline could read the answer straight out
+    of the file. ``phase2.sanitize`` strips it before any agent sees the file:
+    the label stays recoverable by the harness and is invisible to the model.
     """
     return (
         f'"""{scenario} ({cwe}) - {variant} variant.\n\n'
