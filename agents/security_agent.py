@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os, sys
+import random
 import textwrap
 import time
 from pathlib import Path
@@ -40,6 +41,9 @@ Rules:
 8. You have no file-system, shell or search access: the packet is the entire
    evidence. Never try to open, locate, list or read a file — judge from what
    is embedded here.
+9. Keep it short: `rationale` is one sentence, `evidence` and
+   `missing_evidence` hold at most three bare items each, and no field quotes
+   code back — the packet already holds the code.
 
 Decision meanings:
 CONFIRMED = supplied evidence is sufficient to support the vulnerability.
@@ -67,18 +71,127 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
-def _is_retryable(exc: BaseException) -> bool:
-    """Worth another attempt?
+def _failure_kind(exc: BaseException) -> str:
+    """Which retry budget a failure draws from.
 
-    A timeout, a transport failure or an unparsable reply are all "the
-    endpoint had a bad moment" cases — a second try usually succeeds. A
-    programming error is not, and retrying it would only double the delay
-    before the caller sees it. A reply that was cut off at ``max_tokens``
-    is also excluded: the same request would be cut off again.
+    The kinds fail for different reasons and are worth different patience: a
+    garbled reply comes from a model that answered, so retrying is about the
+    prompt (immediate, and with a "JSON only" hint); a dropped connection or
+    an upstream 503 clears in seconds (backoff); a request that ran to the
+    full timeout usually will again, so it gets fewer tries than transport
+    noise — retrying a 600s hang four times is an hour of a worker for one
+    sample. A reply cut off at ``max_tokens`` is excluded outright: the same
+    request would be cut off again. So is a programming error, where retrying
+    only delays the report.
     """
     if isinstance(exc, TruncatedResponse):
-        return False
-    return isinstance(exc, (TimeoutError, RuntimeError, ValueError))
+        return "none"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, ValueError):
+        return "parse"  # the reply was the problem, not the transport
+    if isinstance(exc, RuntimeError):
+        return "transport"
+    return "none"
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Worth another attempt, ignoring how many have been spent?
+
+    ``analyze`` answers the same question per kind with a budget; this is the
+    kind-only form, kept for callers that manage their own retries.
+    """
+    return _failure_kind(exc) != "none"
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Jittered exponential backoff in seconds, capped at 20.
+
+    ``attempt`` counts the failures so far: the first wait is ~2s, long
+    enough for a transient 503 and short enough that it does not show up in
+    a run's wall clock. Jitter keeps concurrent workers from hitting the
+    same upstream in lockstep.
+    """
+    base = min(2.0 * (2 ** (attempt - 1)), 20.0)
+    return base * random.uniform(0.5, 1.0)
+
+
+def _env_attempts(name: str, default: int) -> int:
+    """Read an attempt budget; malformed or non-positive values fall back."""
+    try:
+        return max(1, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
+# Appended to the prompt when a reply did not parse: the reason replies come
+# back unparsable here is a reply that ran on (prose, fences, over-long
+# fields) or that quoted itself, so the retry states the output contract again
+# instead of sending the identical request and expecting a different reply.
+PARSE_RETRY_HINT = (
+    "\n\nYour previous reply could not be parsed as JSON. Return ONLY the "
+    "JSON object described above: no prose before or after it, no markdown "
+    "code fences, every double quote inside a string escaped as \\\" or "
+    "written with single quotes, and every field to 40 words or fewer so the "
+    "reply is not cut off."
+)
+
+
+def _repair_json(text: str) -> str:
+    """Escape quotes and control characters that would break a JSON string.
+
+    A model that writes ``there is no "hole" here`` inside an explanation
+    emits correct English and invalid JSON: the bare quote closes the value
+    early, the remainder of the sentence is parsed as structure, and a verdict
+    the model had actually answered is thrown away as unparsable. Every
+    unparsable reply in the recorded runs was this case, not a truncation.
+
+    The scan tracks strings the way the parser does -- a ``"`` only closes a
+    value if what follows it, skipping whitespace, can follow a string value
+    (`,` for the next member, ``:`` for a key, ``]``/``}`` for the end of a
+    container, or the end of input). Anything else was prose being read as
+    structure, so it is escaped; raw control characters inside a value are
+    escaped for the same reason. Text that is already valid JSON comes back
+    byte-for-byte unchanged.
+    """
+    out: List[str] = []
+    in_string = False
+    index = 0
+    length = len(text)
+    escapes = {"\r": "r", "\n": "n", "\t": "t"}
+    while index < length:
+        char = text[index]
+        if not in_string:
+            in_string = char == '"'
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\":
+            out.append(text[index : index + 2])
+            index += 2
+            continue
+        if char == '"':
+            lookahead = index + 1
+            while lookahead < length and text[lookahead] in " \t\r\n":
+                lookahead += 1
+            if lookahead >= length or text[lookahead] in ",:]}":
+                in_string = False
+                out.append(char)
+            else:
+                out.append('\\"')
+            index += 1
+            continue
+        if char in escapes:
+            out.append("\\" + escapes[char])
+            index += 1
+            continue
+        if ord(char) < 0x20:
+            out.append("\\u%04x" % ord(char))
+            index += 1
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
 
 
 class SecurityAgent:
@@ -230,11 +343,15 @@ class SecurityAgent:
         ``normalize=False`` and parse the reply themselves.
 
         A request that times out, fails in transport or comes back unparsable
-        is retried once (``LLM_MAX_ATTEMPTS``, default 2) on a fresh session:
-        on a slow free endpoint one dropped or truncated reply is common, and
-        retrying costs less than scoring the sample as an error. Every attempt
-        — including the failing ones — is appended to the thinking log when
-        ``LLM_THINKING_OUT`` is set.
+        is retried — each failure kind drawing from its own budget
+        (``LLM_TRANSPORT_ATTEMPTS``, ``LLM_TIMEOUT_ATTEMPTS``,
+        ``LLM_MAX_ATTEMPTS``; see ``_failure_kind``) — on a fresh session: on
+        a slow free endpoint one dropped or garbled reply is common, and
+        retrying costs less than scoring the sample as an error. A transport
+        failure waits out a jittered backoff before the next attempt; a
+        garbled reply is retried immediately with the output contract restated.
+        Every attempt — including the failing ones — is appended to the
+        thinking log when ``LLM_THINKING_OUT`` is set.
         """
         # Kept as two pieces: the OpenAI-compatible transport sends them as a
         # system + user message pair, while the OpenCode transport forwards
@@ -253,7 +370,14 @@ class SecurityAgent:
         identity.setdefault("role", evidence_packet.get("role") or "security")
         identity["model"] = self.model_id
 
-        attempts = self._max_attempts()
+        budgets = {
+            "transport": self._transport_attempts(),
+            "timeout": self._timeout_attempts(),
+            "parse": self._max_attempts(),
+        }
+        used = {"transport": 0, "timeout": 0, "parse": 0}
+        attempts = sum(budgets.values())
+        parse_failed = False
 
         def fail(
             exc: BaseException, attempt: int, started: float, **fields: Any
@@ -268,16 +392,30 @@ class SecurityAgent:
                 error=f"{type(exc).__name__}: {exc}",
                 **fields,
             )
-            return attempt < attempts and _is_retryable(exc)
+            kind = _failure_kind(exc)
+            if kind == "none":
+                return False
+            used[kind] += 1
+            if kind == "parse":
+                nonlocal parse_failed
+                parse_failed = True
+            return used[kind] < budgets[kind]
 
         for attempt in range(1, attempts + 1):
             started = time.monotonic()
             try:
-                parts = await self._request(system, user)
+                parts = await self._request(
+                    system,
+                    (user + PARSE_RETRY_HINT) if parse_failed else user,
+                )
             except Exception as exc:  # noqa: BLE001 - recorded, then retried or raised
+                kind = _failure_kind(exc)
                 if fail(exc, attempt, started):
                     self._drop_session()
-                    await asyncio.sleep(min(2.0 * attempt, 10.0))
+                    # A reply that parsed badly is cured by the prompt, not by
+                    # waiting; a transport failure is cured by waiting.
+                    if kind != "parse":
+                        await asyncio.sleep(_backoff_delay(used[kind]))
                     continue
                 raise
 
@@ -301,9 +439,9 @@ class SecurityAgent:
                     started,
                     thinking=parts["thinking"],
                     answer=parts["text"],
+                    usage=parts.get("usage") or {},
                 ):
                     self._drop_session()
-                    await asyncio.sleep(min(2.0 * attempt, 10.0))
                     continue
                 raise
 
@@ -311,14 +449,17 @@ class SecurityAgent:
                 dict(identity, attempt=attempt, elapsed=round(time.monotonic() - started, 2)),
                 thinking=parts["thinking"],
                 answer=assessment,
+                # The provider's own token accounting: what this attempt cost
+                # in prompt/completion (and hidden reasoning) tokens.
+                usage=parts.get("usage") or {},
             )
             assessment["thinking"] = parts["thinking"]
             return assessment
 
         raise RuntimeError("unreachable: the attempt loop always returns or raises")
 
-    async def _request(self, system: str, user: str) -> Dict[str, str]:
-        """One transport round-trip, returning ``{"text", "thinking"}``."""
+    async def _request(self, system: str, user: str) -> Dict[str, Any]:
+        """One transport round-trip: ``{"text", "thinking", "usage"?}``."""
         if self._openai is not None:
             return await self._chat_openai(system, user)
         return await self._chat_opencode(
@@ -385,12 +526,34 @@ class SecurityAgent:
 
     @staticmethod
     def _max_attempts() -> int:
-        """Total attempts per sample: ``LLM_MAX_ATTEMPTS``, default 2."""
-        try:
-            value = int(os.getenv("LLM_MAX_ATTEMPTS", "2"))
-        except ValueError:
-            return 2
-        return max(1, value)
+        """Attempts on a reply that did not parse: ``LLM_MAX_ATTEMPTS``.
+
+        A parse failure means the model answered, so the fix is the prompt
+        (the retry carries ``PARSE_RETRY_HINT``) and two tries are enough.
+        """
+        return _env_attempts("LLM_MAX_ATTEMPTS", 2)
+
+    @staticmethod
+    def _transport_attempts() -> int:
+        """Attempts on a dropped connection / failed API call.
+
+        ``LLM_TRANSPORT_ATTEMPTS``, default 4: transport noise is the failure
+        kind a free endpoint produces most, and unlike a garbled reply it
+        clears on its own — but only if it is given the tries. This is the
+        budget that keeps an upstream 503 from turning a vulnerable sample
+        into a scored error.
+        """
+        return _env_attempts("LLM_TRANSPORT_ATTEMPTS", 4)
+
+    @staticmethod
+    def _timeout_attempts() -> int:
+        """Attempts on a request that ran to ``LLM_TIMEOUT``.
+
+        ``LLM_TIMEOUT_ATTEMPTS``, default 2: each try already cost the full
+        timeout, so patience here is paid in wall clock on a worker that
+        would otherwise be serving other samples.
+        """
+        return _env_attempts("LLM_TIMEOUT_ATTEMPTS", 2)
 
     @staticmethod
     def _trace(identity: Dict[str, Any], **fields: Any) -> None:
@@ -612,17 +775,34 @@ class SecurityAgent:
         try:
             value = json.loads(text)
         except json.JSONDecodeError as exc:
-            start, end = text.find("{"), text.rfind("}")
-            if start < 0 or end <= start:
+            def brace_slice(candidate: str) -> str:
+                first, last = candidate.find("{"), candidate.rfind("}")
+                return candidate[first:last + 1] if 0 <= first < last else ""
+
+            repaired = _repair_json(text)
+            # The unmodified object slice first (a reply with a prose
+            # preamble), then the repaired slices, then the whole repaired
+            # text for a reply whose only damage was inside its strings.
+            candidates = [
+                brace_slice(text),
+                brace_slice(repaired),
+                repaired if repaired != text else "",
+            ]
+            value = None
+            for candidate in candidates:
+                if not candidate:
+                    continue
+                try:
+                    parsed = json.loads(candidate)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(parsed, dict):
+                    value = parsed
+                    break
+            if value is None:
                 raise ValueError(
                     f"LLM returned invalid JSON: {text[:500]}"
                 ) from exc
-            try:
-                value = json.loads(text[start:end + 1])
-            except json.JSONDecodeError as nested_exc:
-                raise ValueError(
-                    f"LLM returned invalid JSON: {text[:500]}"
-                ) from nested_exc
 
         if not isinstance(value, dict):
             raise ValueError("LLM response must be a JSON object")

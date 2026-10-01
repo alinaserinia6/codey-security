@@ -287,11 +287,20 @@ async def _run_phase2_benchmark_async(
             state["uncertain"] += counts.get("UNCERTAIN", 0)
             if reporter2:
                 src = str(phase2.get("source", report.get("source", "<unknown>")))
+                # The single-agent pipeline calls this input_group_count and
+                # the multi-agent one input_finding_count; reading only the
+                # first name made the progress line print groups=0 for every
+                # sample of a multi-agent run.
+                phase2_meta = phase2.get("metadata") or {}
+                inputs = phase2_meta.get(
+                    "input_finding_count",
+                    phase2_meta.get("input_group_count", 0),
+                )
                 reporter2.step(
                     sample.sample_id,
                     extra=(
                         f"file={src} "
-                        f"groups={phase2.get('metadata', {}).get('input_group_count', 0)}  "
+                        f"groups={inputs}  "
                         f"C={state['confirmed']} R={state['rejected']} U={state['uncertain']}"
                     ),
                 )

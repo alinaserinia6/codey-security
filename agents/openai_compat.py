@@ -135,8 +135,13 @@ def _content_to_text(content: Any) -> str:
     return ""
 
 
-def envelope(data: Any, *, max_tokens: int) -> Dict[str, str]:
-    """Turn an OpenAI chat-completion body into ``{"text", "thinking"}``."""
+def envelope(data: Any, *, max_tokens: int) -> Dict[str, Any]:
+    """Turn an OpenAI chat-completion body into ``{"text", "thinking", "usage"}``.
+
+    ``usage`` is the provider's token accounting (prompt/completion/reasoning)
+    so the thinking log can show what a run actually spent; it is ``{}`` for a
+    body that carries none.
+    """
     if not isinstance(data, dict):
         raise ValueError(f"LLM returned a non-object reply: {str(data)[:300]}")
 
@@ -169,7 +174,7 @@ def envelope(data: Any, *, max_tokens: int) -> Dict[str, str]:
             + (f": {refusal}" if refusal else "")
             + f" (finish_reason={finish or 'unknown'})"
         )
-    return {"text": text, "thinking": thinking}
+    return {"text": text, "thinking": thinking, "usage": data.get("usage") or {}}
 
 
 class OpenAICompat:
@@ -186,6 +191,10 @@ class OpenAICompat:
     and asks again rather than turning the sample into an error. The raised
     budget sticks for the rest of the run, so only the first sample pays the
     exploration cost.
+
+    ``reasoning_effort`` (``LLM_REASONING_EFFORT``) caps the *hidden* thinking
+    before the answer, which is where a reasoning model spends most of its
+    output tokens.
     """
 
     #: How many times the budget may be doubled inside one :meth:`chat`.
@@ -201,6 +210,7 @@ class OpenAICompat:
         max_tokens: Optional[int] = None,
         max_tokens_cap: Optional[int] = None,
         temperature: Optional[float] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         self.base_url = base_url
         self.url = chat_url(base_url)
@@ -222,6 +232,18 @@ class OpenAICompat:
             if temperature is not None
             else _env_float("LLM_TEMPERATURE", None)
         )
+        # ``reasoning_effort`` ("minimal" | "low" | "medium" | "high") is the
+        # provider's knob for how many hidden reasoning tokens to spend before
+        # answering. It dominates the bill: on this endpoint "minimal" answers
+        # with 0 reasoning tokens where the default spends ~150, and a run is
+        # mostly reasoning (5-6k chars of thinking behind a 1-2k char answer).
+        # Empty means "do not send the field" and the provider decides.
+        self.reasoning_effort = (
+            reasoning_effort
+            if reasoning_effort is not None
+            else (os.getenv("LLM_REASONING_EFFORT") or "")
+        ).strip()
+        self._effort_dropped = False
 
         key = api_key if api_key is not None else os.getenv("LLM_API_KEY") or ""
         key = key.strip()
@@ -262,12 +284,26 @@ class OpenAICompat:
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
+        if self.reasoning_effort and not self._effort_dropped:
+            payload["reasoning_effort"] = self.reasoning_effort
 
         escalations = 0
         while True:
             payload["max_tokens"] = self.max_tokens
             response = self._client.post(self.url, json=payload)
             if response.status_code >= 400:
+                # A provider that does not know reasoning_effort rejects every
+                # request with a 400 naming the field (or the body in general).
+                # Drop it for the rest of the run and ask again, so one unknown
+                # parameter cannot turn every sample into a failure: the field
+                # is popped, so this branch cannot fire a second time.
+                if (
+                    response.status_code == 400
+                    and "reasoning_effort" in payload
+                ):
+                    self._effort_dropped = True
+                    payload.pop("reasoning_effort", None)
+                    continue
                 # Body first: providers put the real reason (bad model id,
                 # expired key, rate limit) there, not in the status line.
                 raise UpstreamError(

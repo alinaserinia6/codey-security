@@ -22,9 +22,10 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
 from analyzers.catalog import VulnerabilityCatalog, get_catalog
+from analyzers.cwe_family import cwes_match
 from analyzers.taint import taint_chains_for, taint_modelled
 
 from agents import thinking_log
@@ -73,9 +74,26 @@ class MultiAgentConfig:
     require_chain_evidence: bool = True
 
     # A chain whose mitigation the engine recognised is evidence the finding is
-    # already handled. The verifier is told about it and can still confirm for a
-    # reason the engine does not model, but it may not quietly ignore it.
+    # already handled. The verifier is told about it and can still confirm for
+    # a reason the engine does not model, but it may not quietly ignore it.
     reject_mitigated: bool = False
+
+    # The scanner restates one issue several times ("CWE-125 at line 176", then
+    # again at 178 and at 829). Every restatement otherwise buys its own
+    # verifier pass and, when confirmed, its own report entry for something the
+    # reader is shown once. With ``merge_claims`` hypotheses that name the same
+    # CWE are verified as one claim, walking its sites in scanner order and
+    # stopping at the first confirmation; with ``merge_findings`` confirmed
+    # findings whose CWE families overlap are folded into a single report entry.
+    # Both default to True and are switchable for ablation.
+    merge_claims: bool = True
+    merge_findings: bool = True
+
+    # Lines within this distance are the same place: a restatement a few lines
+    # down does not earn a second verifier pass. It also bounds the line a
+    # merged report entry may claim -- a merge spanning more than this reports
+    # no line rather than an arbitrary one.
+    claim_site_radius: int = 5
 
 
 class MultiAgentPipeline:
@@ -118,13 +136,24 @@ class MultiAgentPipeline:
         )
 
         scan_packet = self._scan_packet(source, language, report)
+        scanner_failed = False
         try:
             with thinking_log.scope(id=source, file=source, role="scanner"):
                 raw = await self.ask_json(SCANNER_PROMPT, scan_packet)
             hypotheses = self._parse_hypotheses(raw)
         except Exception as exc:  # noqa: BLE001 - one file must not stop a run
             result.errors.append(f"scanner: {type(exc).__name__}: {exc}")
+            scanner_failed = True
             hypotheses = []
+
+        if not hypotheses and scanner_failed:
+            # A dropped connection must not read as "this file is clean" when
+            # the tools already flagged it: the tool findings are exactly what
+            # the scanner was going to reason about, so they are handed to the
+            # verifier instead of the sample being lost.
+            hypotheses = self._fallback_hypotheses(report)
+            if hypotheses:
+                result.metadata["scanner_fallback"] = True
 
         result.metadata["hypotheses_proposed"] = len(hypotheses)
         result.metadata["hypotheses_truncated"] = len(hypotheses) > self.cfg.max_hypotheses
@@ -132,30 +161,247 @@ class MultiAgentPipeline:
         if not hypotheses:
             return result.to_dict()
 
+        claims = self._claims(hypotheses)
+        if self.cfg.merge_claims:
+            result.metadata["claims"] = len(claims)
+            result.metadata["claims_merged"] = len(hypotheses) - len(claims)
+
         verifications = await asyncio.gather(
             *[
-                self._verify_one(h, scan_packet, result, source)
-                for h in hypotheses
+                self._verify_claim(claim, scan_packet, result, source)
+                for claim in claims
             ],
             return_exceptions=True,
         )
-        verdicts: List[str] = []
+        verified: List[Tuple[FinalDecision, Optional[ReportFinding]]] = []
         for outcome in verifications:
             if isinstance(outcome, BaseException):
                 result.errors.append(f"verifier: {type(outcome).__name__}: {outcome}")
                 continue
             if outcome is None:
                 continue
-            finding, verdict = outcome
-            verdicts.append(verdict)
-            if finding is not None:
-                result.findings.append(finding)
+            verified.extend(outcome)
 
+        merges: List[Dict[str, Any]] = []
+        if self.cfg.merge_findings:
+            verified, merges = self._merge_findings(verified)
+        if merges:
+            result.metadata["claim_merges"] = merges
+
+        result.decisions = [decision for decision, _ in verified]
+        result.findings = [finding for _, finding in verified if finding is not None]
         result.metadata["decision_counts"] = {
-            status: verdicts.count(status) for status in DECISIONS
+            status: sum(1 for d in result.decisions if d.status == status)
+            for status in DECISIONS
         }
         result.metadata["reported_findings"] = len(result.findings)
         return result.to_dict()
+
+    # -- claims -----------------------------------------------------------
+    def _claims(self, hypotheses: List[Hypothesis]) -> List[List[Hypothesis]]:
+        """Group hypotheses that name the same CWE, keeping scanner order.
+
+        One claim is one thing to verify: the scanner restating "CWE-125" at
+        nine lines is one vulnerability it pointed at nine times, not nine
+        independent questions. A hypothesis without a CWE gets a claim of its
+        own -- with nothing to compare there is no evidence the two restatements
+        are the same claim, and the verifier is the better judge.
+        """
+        if not self.cfg.merge_claims:
+            return [[hypothesis] for hypothesis in hypotheses]
+        order: List[str] = []
+        buckets: Dict[str, List[Hypothesis]] = {}
+        for hypothesis in hypotheses:
+            key = hypothesis.cwe.strip().upper() or f"\x00{hypothesis.id}"
+            if key not in buckets:
+                buckets[key] = []
+                order.append(key)
+            buckets[key].append(hypothesis)
+        return [buckets[key] for key in order]
+
+    def _sites(self, claim: List[Hypothesis]) -> List[List[Hypothesis]]:
+        """Split one claim into the distinct places it points at.
+
+        Lines within ``claim_site_radius`` are the same place, so a restatement
+        a few lines down does not buy a second verifier pass. The order is the
+        scanner's, because it is the order the model considered the sites in.
+        """
+        if len(claim) == 1:
+            return [claim]
+        sites: List[List[Hypothesis]] = []
+        for hypothesis in claim:
+            line = hypothesis.line
+            target: Optional[List[Hypothesis]] = None
+            if line is None:
+                target = sites[0] if sites else None
+            else:
+                for site in sites:
+                    reference = site[0].line
+                    if reference is None or abs(line - reference) <= self.cfg.claim_site_radius:
+                        target = site
+                        break
+            if target is None:
+                sites.append([hypothesis])
+            else:
+                target.append(hypothesis)
+        return sites
+
+    async def _verify_claim(
+        self,
+        claim: List[Hypothesis],
+        scan_packet: Dict[str, Any],
+        result: Phase2Report,
+        source: str,
+    ) -> List[Tuple[FinalDecision, Optional[ReportFinding]]]:
+        """Verify one claim site by site until the verifier confirms it.
+
+        Stopping at the first confirmation is what keeps a repeated claim from
+        producing a report entry per restatement: one confirmed site reports
+        the claim, and the sites after it would only restate it. Sites that are
+        rejected are still tried, so a claim whose first site is benign keeps
+        its chance at the line the scanner also pointed at.
+        """
+        out: List[Tuple[FinalDecision, Optional[ReportFinding]]] = []
+        for site in self._sites(claim):
+            outcome = await self._verify_one(site[0], scan_packet, result, source)
+            if outcome is None:
+                break  # the verifier failed; the error is already recorded
+            out.append(outcome)
+            if outcome[0].status == "CONFIRMED":
+                break
+        return out
+
+    @staticmethod
+    def _fallback_hypotheses(report: Dict[str, Any]) -> List[Hypothesis]:
+        """Tool findings as hypotheses, used when the Scanner call failed."""
+        hypotheses: List[Hypothesis] = []
+        for index, finding in enumerate(report.get("findings") or []):
+            if not isinstance(finding, dict):
+                continue
+            cwe = finding.get("cwe") or ""
+            if isinstance(cwe, (list, tuple)):
+                cwe = cwe[0] if cwe else ""
+            try:
+                line = finding.get("line")
+                line = int(line) if line is not None else None
+            except (TypeError, ValueError):
+                line = None
+            hypotheses.append(
+                Hypothesis(
+                    cwe=str(cwe).strip().upper(),
+                    line=line,
+                    claim=str(
+                        finding.get("message")
+                        or finding.get("issue_text")
+                        or "reported by a static tool"
+                    ),
+                    suspected_sink=str(finding.get("rule_id") or ""),
+                    id=f"T{index + 1}",
+                )
+            )
+        return hypotheses
+
+    def _merge_findings(
+        self,
+        verified: List[Tuple[FinalDecision, Optional[ReportFinding]]],
+    ) -> Tuple[List[Tuple[FinalDecision, Optional[ReportFinding]]], List[Dict[str, Any]]]:
+        """Fold confirmed findings that describe the same claim.
+
+        Confirmed findings whose CWE families overlap say the same thing to a
+        reader -- and to the matcher: one report that confirms CWE-125 at six
+        lines of a single file states one claim six times. The most confident
+        entry survives; it carries every CWE the folded entries claimed, and
+        the absorbed entries are recorded in ``metadata["claim_merges"]`` so
+        the report still accounts for every verdict it reached.
+        """
+        slots = [
+            index
+            for index, (decision, _) in enumerate(verified)
+            if decision.status == "CONFIRMED" and decision.cwe
+        ]
+        if len(slots) < 2:
+            return verified, []
+
+        parent = list(range(len(slots)))
+
+        def find(x: int) -> int:
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for i in range(len(slots)):
+            for j in range(i + 1, len(slots)):
+                if cwes_match(
+                    verified[slots[i]][0].cwe, verified[slots[j]][0].cwe
+                ):
+                    parent[find(i)] = find(j)
+
+        groups: Dict[int, List[int]] = {}
+        for i in range(len(slots)):
+            groups.setdefault(find(i), []).append(i)
+
+        drops: Dict[int, Dict[str, Any]] = {}
+        for members in groups.values():
+            if len(members) < 2:
+                continue
+            group_slots = [slots[m] for m in members]
+            primary_slot = max(
+                group_slots,
+                key=lambda slot: (
+                    verified[slot][0].confidence,
+                    -(verified[slot][0].line or 0),
+                ),
+            )
+            primary = verified[primary_slot][0]
+            lines = [
+                verified[slot][0].line
+                for slot in group_slots
+                if verified[slot][0].line is not None
+            ]
+            spread = (
+                max(abs(line - primary.line) for line in lines)
+                if lines and primary.line is not None
+                else None
+            )
+
+            merged_cwes: List[str] = []
+            for slot in [primary_slot] + [
+                slot for slot in group_slots if slot != primary_slot
+            ]:
+                for cwe in verified[slot][0].cwe:
+                    if cwe.upper() not in {c.upper() for c in merged_cwes}:
+                        merged_cwes.append(cwe)
+            confidence = max(verified[slot][0].confidence for slot in group_slots)
+
+            primary.cwe = merged_cwes
+            primary.confidence = confidence
+            primary.line = (
+                primary.line
+                if spread is not None and spread <= self.cfg.claim_site_radius
+                else None
+            )
+            for slot in group_slots:
+                if slot == primary_slot:
+                    continue
+                decision = verified[slot][0]
+                drops[slot] = {
+                    "merged_into": primary.group_id,
+                    "group_id": decision.group_id,
+                    "line": decision.line,
+                    "cwe": list(decision.cwe),
+                }
+            finding = verified[primary_slot][1]
+            if finding is not None:
+                finding.line = primary.line
+
+        if not drops:
+            return verified, []
+        kept = [
+            item for index, item in enumerate(verified) if index not in drops
+        ]
+        return kept, [drops[index] for index in sorted(drops)]
+
 
     # -- scanner ---------------------------------------------------------
     def _scan_packet(
@@ -216,7 +462,14 @@ class MultiAgentPipeline:
         scan_packet: Dict[str, Any],
         result: Phase2Report,
         source: str,
-    ) -> Optional[tuple]:
+    ) -> Optional[Tuple[FinalDecision, Optional[ReportFinding]]]:
+        """Verify one hypothesis; ``None`` when the verifier itself failed.
+
+        The verdict is returned rather than appended to the report so that the
+        claim walk decides what reaches it: a claim stops at its first
+        confirmation, and the report merge folds the confirmations that
+        describe the same thing.
+        """
         async with self._sem:
             chains = self._chains_near(scan_packet, hypothesis.line)
             proven = [c for c in chains if c.get("source_expression")]
@@ -256,24 +509,19 @@ class MultiAgentPipeline:
 
             verification = self._parse_verification(raw)
             if verification.decision != "CONFIRMED":
-                result.decisions.append(
-                    self._rejection(hypothesis, verification)
-                )
-                return None, verification.decision
+                return self._rejection(hypothesis, verification), None
 
             reason = self._evidence_gate(hypothesis, verification, proven)
             if reason:
-                result.decisions.append(
-                    self._rejection(
-                        hypothesis, verification, reason=reason
-                    )
+                return (
+                    self._rejection(hypothesis, verification, reason=reason),
+                    None,
                 )
-                return None, "REJECTED"
 
             if verification.confidence < self.cfg.min_confidence:
                 # A confirmation the verifier itself does not stand behind is
                 # downgraded rather than reported.
-                result.decisions.append(
+                return (
                     self._rejection(
                         hypothesis,
                         verification,
@@ -281,17 +529,14 @@ class MultiAgentPipeline:
                             f"confidence {verification.confidence:.2f} below "
                             f"threshold {self.cfg.min_confidence:.2f}"
                         ),
-                    )
+                    ),
+                    None,
                 )
-                return None, "REJECTED"
-            finding = self._to_finding(hypothesis, verification, chains)
+            finding = self._to_finding(hypothesis, verification, chains, source)
             # Confirmed candidates are recorded alongside the rejected ones: the
             # report has to account for every hypothesis the scanner raised, not
             # only the ones that were dropped.
-            result.decisions.append(
-                self._rejection(hypothesis, verification)
-            )
-            return finding, "CONFIRMED"
+            return self._rejection(hypothesis, verification), finding
 
     def _evidence_gate(
         self,
@@ -380,6 +625,7 @@ class MultiAgentPipeline:
         hypothesis: Hypothesis,
         verification: Verification,
         chains: Sequence[Dict[str, Any]],
+        source: str = "",
     ) -> ReportFinding:
         """Turn a confirmed hypothesis into a report entry.
 
@@ -390,7 +636,7 @@ class MultiAgentPipeline:
         catalogue = self.catalog.report_fields(primary)
         best = self._best_chain(chains, verification, hypothesis.line)
 
-        file_part, line_part = self._split_location(verification, chains)
+        file_part, line_part = self._split_location(verification, chains, source)
         return ReportFinding(
             cwe=primary,
             severity=verification.severity,
@@ -585,17 +831,36 @@ class MultiAgentPipeline:
 
     @staticmethod
     def _split_location(
-        verification: Verification, chains: Sequence[Dict[str, Any]]
+        verification: Verification,
+        chains: Sequence[Dict[str, Any]],
+        source: str = "",
     ) -> tuple:
-        """The exact location required by the proposal's report schema."""
+        """The exact location required by the proposal's report schema.
+
+        ``source_location`` is model output. The schema shows it as
+        ``"file:line"``, and a model asked to be terse sometimes answers with
+        that placeholder itself ("file:183") or with a bare basename -- either
+        would put a file the report cannot stand behind into the finding. So a
+        location that names no path falls back to the file actually being
+        analysed, keeping the line when it parsed.
+        """
         raw = verification.source_location
         if isinstance(raw, str) and ":" in raw:
-            file_part, _, line_part = raw.rpartition(":")
+            file_part, _, line_text = raw.rpartition(":")
+            file_part = file_part.strip()
             try:
-                return file_part, int(line_part)
+                line: Optional[int] = int(line_text)
             except ValueError:
-                return raw, None
+                line = None
+            if "/" in file_part or "\\" in file_part:
+                return file_part, line
+            if source:
+                # A bare word is either the file under analysis or the schema's
+                # own placeholder; the path we hold is correct in both cases.
+                return source, line
         for chain in chains:
             if chain.get("sink_line"):
                 return chain.get("file"), int(chain["sink_line"])
+        if source:
+            return source, None
         return None, None

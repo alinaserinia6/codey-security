@@ -129,6 +129,10 @@ class Config:
     phase2_require_chain_evidence: bool = True
     phase2_reject_mitigated: bool = False
     phase2_min_confidence: float = 0.5
+    # Claim handling: one report entry per claim, one entry per family.
+    phase2_merge_claims: bool = True
+    phase2_merge_findings: bool = True
+    phase2_claim_site_radius: int = 5
 
     # --- Phase 3 matching ----------------------------------------------
     phase3_line_tolerance: int = 5
@@ -192,6 +196,9 @@ def get_config() -> Config:
         phase2_require_chain_evidence=_env_bool("PHASE2_REQUIRE_CHAIN_EVIDENCE", True),
         phase2_reject_mitigated=_env_bool("PHASE2_REJECT_MITIGATED", False),
         phase2_min_confidence=_env_float("PHASE2_MIN_CONFIDENCE", 0.5),
+        phase2_merge_claims=_env_bool("PHASE2_MERGE_CLAIMS", True),
+        phase2_merge_findings=_env_bool("PHASE2_MERGE_FINDINGS", True),
+        phase2_claim_site_radius=max(0, _env_int("PHASE2_CLAIM_SITE_RADIUS", 5)),
         phase3_line_tolerance=max(0, _env_int("PHASE3_LINE_TOLERANCE", 5)),
         scenarios=_make_scenarios(),
     )

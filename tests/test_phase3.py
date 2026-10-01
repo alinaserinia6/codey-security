@@ -29,3 +29,29 @@ def test_benign_sample_creates_negative_support():
     assert r.metrics.confusion.fp == 1
     assert r.metrics.confusion.fn == 0
     assert r.metrics.confusion.tn == 0
+
+
+def test_false_positives_are_counted_per_finding():
+    """A benign file carrying three findings is three false positives, not one.
+
+    FP is a finding-level quantity (README), while TN and the benign flag rate
+    are sample-level.  Counting the benign side per *sample* silently dropped
+    findings and made metrics.unmatched_predictions disagree with the stored
+    unmatched_predictions list.
+    """
+    gt = [GroundTruth("v", "v.c", True, ["CWE-120"], line=4), GroundTruth("b", "b.c", False)]
+    pred = [
+        Prediction("v", "v.c", True, ["CWE-120"], line=4),
+        Prediction("b", "b.c", True, ["CWE-120"], line=4),
+        Prediction("b", "b.c", True, ["CWE-120"], line=9),
+        Prediction("b", "b.c", True, ["CWE-120"], line=20),
+    ]
+    r = evaluate("test", pred, gt)
+    assert r.metrics.confusion.fp == 3
+    assert r.metrics.confusion.tn == 0
+    assert r.metrics.unmatched_predictions == len(r.unmatched_predictions) == 3
+
+    sample_level = r.metadata["sample_level"]
+    assert sample_level["benign_flagged"] == 1
+    assert sample_level["unmatched_findings_on_vulnerable"] == 0
+    assert sample_level["findings_per_vulnerable_file"] == 1.0

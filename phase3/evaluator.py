@@ -12,7 +12,11 @@ def evaluate(experiment: str, predictions: Iterable[Prediction], ground_truth: I
     benign_ids={g.sample_id for g in neg_gts}
     benign_pred_ids={p.sample_id for p in pos_preds if p.sample_id in benign_ids}
     unmatched_positive_predictions=[p for p in unmatched_preds if p.sample_id not in benign_ids]
-    fp=len(unmatched_positive_predictions)+len(benign_pred_ids)
+    # FP is finding-level (see README), so a benign file carrying three
+    # findings contributes three false positives, not one: the sample-level
+    # view of the same file lives in benign_pred_ids/tn below.
+    benign_findings=[p for p in pos_preds if p.sample_id in benign_ids]
+    fp=len(unmatched_positive_predictions)+len(benign_findings)
     fn=len(unmatched_gts)
     tn=len(benign_ids-benign_pred_ids)
     metrics=compute_metrics(ConfusionMatrix(len(matches),fp,fn,tn),matched_predictions=len(matches),unmatched_predictions=fp)
@@ -37,6 +41,11 @@ def _sample_level(pos_preds, pos_gts, neg_gts, benign_ids, benign_pred_ids, matc
     benign_flagged=len(benign_pred_ids)
     benign_total=len(neg_gts)
     matched_sample_ids={m.prediction.sample_id for m in matches}
+    # Findings raised on a *benign* file belong to the benign population;
+    # including them here would inflate the per-vulnerable-file average with
+    # the very noise benign_flag_rate is meant to describe.
+    vulnerable_ids={g.sample_id for g in pos_gts}
+    findings_on_vulnerable=[p for p in pos_preds if p.sample_id in vulnerable_ids]
     return {
         "vulnerable_samples":len(pos_gts),
         "vulnerable_detected":len(matched_sample_ids),
@@ -45,7 +54,7 @@ def _sample_level(pos_preds, pos_gts, neg_gts, benign_ids, benign_pred_ids, matc
         "benign_flagged":benign_flagged,
         "benign_flag_rate":(benign_flagged/benign_total) if benign_total else 0.0,
         "unmatched_findings_on_vulnerable":len(unmatched_positive_predictions),
-        "findings_per_vulnerable_file":(len(pos_preds)/len(pos_gts)) if pos_gts else 0.0,
+        "findings_per_vulnerable_file":(len(findings_on_vulnerable)/len(pos_gts)) if pos_gts else 0.0,
     }
 
 def _per_cwe(preds: list[Prediction], gts: list[GroundTruth], cfg: MatchConfig) -> dict[str,Metrics]:
@@ -73,8 +82,11 @@ def _per_cwe(preds: list[Prediction], gts: list[GroundTruth], cfg: MatchConfig) 
         m,up,ug=greedy_match(pp,pg,cfg)
         predicted_benign={p.sample_id for p in pp if p.sample_id in benign}
         # A prediction on a benign file is a false positive on that file, not a
-        # failed match; counting it in both terms would double count it.
-        fp=len([p for p in up if p.sample_id not in benign])+len(predicted_benign)
+        # failed match; counting it in both terms would double count it.  FP is
+        # finding-level, so the benign side is tallied per finding while tn
+        # stays sample-level and counts flagged samples.
+        benign_unmatched=[p for p in up if p.sample_id in benign]
+        fp=len([p for p in up if p.sample_id not in benign])+len(benign_unmatched)
         tn=len(benign-predicted_benign)
         out[cwe]=compute_metrics(ConfusionMatrix(len(m),fp,len(ug),tn),matched_predictions=len(m),unmatched_predictions=fp)
     return out

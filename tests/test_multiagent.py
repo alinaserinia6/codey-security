@@ -175,6 +175,46 @@ def test_confirmed_hypothesis_becomes_a_report_finding(tmp_path):
     assert result["metadata"]["decision_counts"]["CONFIRMED"] == 1
 
 
+@pytest.mark.parametrize(
+    ("location", "expected_line"),
+    [
+        # The schema shows the field as "file:line"; a terse model sometimes
+        # answers with that placeholder itself.
+        ("file:183", 183),
+        # The basename of the file under analysis still identifies it.
+        ("sample.py:6", 6),
+        # A name the report cannot check: the line survives, the file does not.
+        ("elsewhere.c:7", 7),
+        # No usable line, but a usable file.
+        ("sample.py:abc", None),
+    ],
+)
+def test_report_names_the_file_under_analysis_not_a_model_location(
+    tmp_path, location, expected_line
+):
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "argv to shell"}]},
+        [
+            {
+                "decision": "CONFIRMED",
+                "confidence": 0.9,
+                "chain_verified": True,
+                "cwe": ["CWE-78"],
+                "severity": "HIGH",
+                "explanation": "argv[1] is passed to a shell.",
+                "source_location": location,
+            }
+        ],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 1
+    finding = result["findings"][0]
+    assert finding["file"] == str(path)
+    assert finding["line"] == expected_line
+
+
 def test_verifier_is_shown_the_dataflow_chain(tmp_path):
     path = write(tmp_path, VULNERABLE)
     agent = StubAgent(
@@ -709,11 +749,27 @@ def test_verifier_gets_no_scanner_reasoning(tmp_path):
 
 
 def test_hypothesis_budget_is_enforced(tmp_path):
+    """The budget bounds the raw proposal count, before claims are grouped.
+
+    The twenty proposals here name twenty different CWEs, so the five that
+    survive the budget are five claims and five verifier calls: that is what
+    the budget promises to bound. Twenty restatements of one claim would
+    collapse to a single call instead -- see
+    ``test_a_repeated_claim_is_verified_once`` -- which is a saving, not a
+    loss, and is not what this test is about.
+    """
     path = write(tmp_path, VULNERABLE)
+    cwes = [
+        "CWE-78", "CWE-89", "CWE-22", "CWE-502", "CWE-94",
+        "CWE-79", "CWE-90", "CWE-113", "CWE-116", "CWE-176",
+        "CWE-250", "CWE-259", "CWE-306", "CWE-319", "CWE-352",
+        "CWE-362", "CWE-494", "CWE-601", "CWE-611", "CWE-759",
+    ]
     agent = StubAgent(
         {
             "hypotheses": [
-                {"cwe": "CWE-78", "line": 6, "claim": f"h{i}"} for i in range(20)
+                {"cwe": cwe, "line": 6, "claim": f"h{i}"}
+                for i, cwe in enumerate(cwes)
             ]
         },
         [yes()],
@@ -724,6 +780,154 @@ def test_hypothesis_budget_is_enforced(tmp_path):
     assert result["metadata"]["hypotheses_truncated"] is True
     verifier_calls = [p for s, p in agent.prompts if p.get("role") == "verifier"]
     assert len(verifier_calls) == 5, "the budget must bound the verifier work"
+
+
+# -- claim grouping -------------------------------------------------------
+
+
+def test_a_repeated_claim_is_verified_once(tmp_path):
+    """Three restatements of CWE-78 at the same sink are one claim.
+
+    The scanner restating a vulnerability it already proposed is the single
+    largest source of duplicated report entries in the LLM runs: nine lines
+    pointed at nine times became nine CONFIRMED decisions and nine findings,
+    eight of them false positives against a matcher that had already matched
+    the file. One call, one entry.
+    """
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-78", "line": 6, "claim": "h0"},
+                {"cwe": "CWE-78", "line": 6, "claim": "h1"},
+                {"cwe": "CWE-78", "line": 7, "claim": "h2"},
+            ]
+        },
+        [yes()],
+    )
+    result = run(agent, phase1_report(path))
+
+    verifier_calls = [p for s, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 1, "one claim, one verifier pass"
+    assert result["metadata"]["hypotheses_proposed"] == 3
+    assert result["metadata"]["claims"] == 1
+    assert result["metadata"]["claims_merged"] == 2
+    assert len(result["decisions"]) == 1
+    assert len(result["findings"]) == 1
+    assert result["decisions"][0]["status"] == "CONFIRMED"
+    assert result["decisions"][0]["line"] == 6
+
+
+def test_a_claim_is_verified_until_it_confirms(tmp_path):
+    """Sites are tried in the scanner's order and stop at the first CONFIRMED.
+
+    Stopping is what keeps a repeated claim from buying a report entry per
+    restatement; trying the next site when a site is rejected is what keeps a
+    claim alive when the first line the scanner pointed at was wrong.
+    """
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-78", "line": 6, "claim": "first site"},
+                {"cwe": "CWE-78", "line": 40, "claim": "second site"},
+            ]
+        },
+        [
+            {"decision": "REJECTED", "confidence": 0.9, "explanation": "no path"},
+            yes(),
+        ],
+    )
+    result = run(agent, phase1_report(path))
+
+    verifier_calls = [p for s, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 2, "the rejected site does not end the claim"
+    assert [d["status"] for d in result["decisions"]] == ["REJECTED", "CONFIRMED"]
+    assert len(result["findings"]) == 1
+
+
+def test_confirmed_findings_of_one_family_merge(tmp_path):
+    """CWE-120 and CWE-125 are one claim to a reader and to the matcher.
+
+    Two distinct claims that the verifier confirmed, naming an overflow and an
+    over-read of the same sink: two report entries, two predictions, and two
+    chances to be scored against a ground truth that can only be matched once
+    per file. The union of the CWEs keeps recall -- every CWE either entry
+    carried is still stated -- while the report says it once.
+    """
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-120", "line": 6, "claim": "overflow"},
+                {"cwe": "CWE-125", "line": 6, "claim": "over-read"},
+            ]
+        },
+        [yes(), yes()],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 1
+    confirmed = [d for d in result["decisions"] if d["status"] == "CONFIRMED"]
+    assert len(confirmed) == 1
+    assert confirmed[0]["cwe"] == ["CWE-120", "CWE-125"]
+    assert confirmed[0]["line"] == 6
+    merges = result["metadata"]["claim_merges"]
+    assert [m["group_id"] for m in merges] == ["H2"]
+    assert merges[0]["merged_into"] == "H1"
+
+
+def test_merge_is_off_when_configured_off(tmp_path):
+    """The ablation switch: claims and merges can both be turned back off."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-78", "line": 6, "claim": "h0"},
+                {"cwe": "CWE-78", "line": 6, "claim": "h1"},
+            ]
+        },
+        [yes(), yes()],
+    )
+    result = run(agent, phase1_report(path), merge_claims=False, merge_findings=False)
+
+    verifier_calls = [p for s, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 2
+    assert len(result["findings"]) == 2
+    assert "claim_merges" not in result["metadata"]
+
+
+def test_scanner_failure_falls_back_to_tool_findings(tmp_path):
+    """A dropped Scanner call must not blank a report the tools had filled.
+
+    The fallback hands the tool findings to the verifier as hypotheses, so the
+    sample still costs a verifier pass rather than being scored as an error
+    with no predictions at all.
+    """
+    path = write(tmp_path, VULNERABLE)
+    report = phase1_report(path)
+    report["findings"] = [
+        {"cwe": "CWE-78", "line": 6, "message": "shell=True", "rule_id": "B602"}
+    ]
+
+    class FailingScanner(StubAgent):
+        async def __call__(self, system, packet):
+            if packet.get("role") == "scanner":
+                self.prompts.append((system, packet))
+                raise RuntimeError("scanner unavailable")
+            return await super().__call__(system, packet)
+
+    agent = FailingScanner({}, [yes()])
+    result = run(agent, report)
+
+    assert result["metadata"]["scanner_fallback"] is True
+    assert result["metadata"]["hypotheses_proposed"] == 1
+    verifier_calls = [p for s, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 1
+    assert verifier_calls[0]["hypothesis"]["cwe"] == "CWE-78"
+    assert len(result["findings"]) == 1
+    assert any("scanner" in error for error in result["errors"])
+
 
 
 # -- the phase 2 runner --------------------------------------------------

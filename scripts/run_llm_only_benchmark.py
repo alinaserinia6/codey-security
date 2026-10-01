@@ -74,6 +74,10 @@ JSON schema (the only accepted output):
 }
 
 CONFIRMED means the file contains a vulnerability, REJECTED means it does not.
+
+Keep it short: `rationale` is one sentence naming the defective statement,
+`evidence` and `missing_evidence` hold at most three bare items each, and no
+field quotes the file back — the whole file was sent once already.
 """.strip()
 
 _LANGUAGE_BY_EXT = {

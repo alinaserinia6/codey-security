@@ -129,6 +129,9 @@ async def run(args: argparse.Namespace) -> int:
             min_confidence=args.min_confidence,
             require_chain_evidence=not args.allow_unproven_chains,
             reject_mitigated=args.reject_mitigated,
+            merge_claims=not args.no_merge_claims,
+            merge_findings=not args.no_merge_findings,
+            claim_site_radius=args.claim_site_radius,
         )
         pipeline = build_pipeline(
             config=config,
@@ -248,6 +251,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--no-taint", action="store_true")
     parser.add_argument("--no-structural", action="store_true")
     parser.add_argument("--no-tools", action="store_true")
+    parser.add_argument(
+        "--no-merge-claims",
+        action="store_true",
+        help="ablation: verify every hypothesis separately instead of "
+        "restatements of one CWE as a single claim",
+    )
+    parser.add_argument(
+        "--no-merge-findings",
+        action="store_true",
+        help="ablation: report each confirmed finding instead of folding "
+        "confirmed findings whose CWE families overlap",
+    )
+    parser.add_argument(
+        "--claim-site-radius",
+        type=int,
+        default=5,
+        help="line distance within which merged findings keep a line",
+    )
     args = parser.parse_args(argv)
     # Validate numeric knobs up front so a typo fails fast with a clear
     # message instead of a cryptic Semaphore/asyncio error mid-run.
@@ -256,6 +277,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     for name in ("context_radius", "max_hypotheses", "concurrency", "file_concurrency"):
         if getattr(args, name) < 0 or (name != "context_radius" and getattr(args, name) == 0):
             parser.error(f"--{name.replace('_', '-')} must be a positive integer")
+    if args.claim_site_radius < 0:
+        parser.error("--claim-site-radius must be >= 0")
     if args.timeout is not None and not args.timeout > 0:
         parser.error("--timeout must be > 0")
     if not 0.0 <= args.min_confidence <= 1.0:

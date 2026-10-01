@@ -69,6 +69,9 @@ def _make_phase2(config: Config):
                 require_chain_evidence=config.phase2_require_chain_evidence,
                 reject_mitigated=config.phase2_reject_mitigated,
                 min_confidence=config.phase2_min_confidence,
+                merge_claims=config.phase2_merge_claims,
+                merge_findings=config.phase2_merge_findings,
+                claim_site_radius=config.phase2_claim_site_radius,
             ),
             base_url=config.llm_base_url,
             model_id=config.llm_model_id,
@@ -206,12 +209,15 @@ def _merge_phase2_reports(
     errors: List[str] = []
     file_entries: List[Dict[str, Any]] = []
     for report in reports:
+        meta = report.get("metadata") or {}
         file_entries.append(
             {
                 "source": report.get("source"),
                 "language": report.get("language"),
                 "decision_count": len(report.get("decisions", [])),
-                "input_group_count": report.get("metadata", {}).get("input_group_count", 0),
+                "input_group_count": meta.get(
+                    "input_group_count", meta.get("input_finding_count", 0)
+                ),
             }
         )
         decisions.extend(report.get("decisions", []))

@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 import pytest
 
 from agents import thinking_log
-from agents.security_agent import SecurityAgent
+from agents.security_agent import SecurityAgent, _backoff_delay
 
 
 class FakeSession:
@@ -142,6 +142,114 @@ def test_retry_can_be_disabled(tmp_path, monkeypatch):
     with pytest.raises(ValueError):
         analyse(agent, id="sample-4")
     assert agent.client.session.chat_calls == 1
+
+
+# -- retry budgets ---------------------------------------------------------
+#
+# A transport failure and a garbled reply are not the same event: the endpoint
+# that answered with garbage can answer again without waiting, while the one
+# that 503'd needs tries it did not get when every kind shared one budget.
+# That single budget is what scored a vulnerable sample as an error when an
+# upstream 503 survived both attempts.
+
+
+def test_attempt_budgets_have_documented_defaults(monkeypatch):
+    for name in ("LLM_MAX_ATTEMPTS", "LLM_TRANSPORT_ATTEMPTS",
+                 "LLM_TIMEOUT_ATTEMPTS"):
+        monkeypatch.delenv(name, raising=False)
+
+    assert SecurityAgent._max_attempts() == 2
+    assert SecurityAgent._transport_attempts() == 4
+    assert SecurityAgent._timeout_attempts() == 2
+
+
+def test_transport_failures_are_retried_beyond_the_parse_budget(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(thinking_log.ENV_OUT, str(tmp_path / "t.json"))
+    monkeypatch.setenv("LLM_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("LLM_TRANSPORT_ATTEMPTS", "4")
+    monkeypatch.setattr("agents.security_agent._backoff_delay", lambda n: 0.0)
+
+    agent = make_agent(
+        [
+            RuntimeError("connection reset"),
+            RuntimeError("connection reset"),
+            reply('{"decision": "REJECTED"}'),
+        ]
+    )
+    result = analyse(agent, id="sample-5")
+
+    assert result["decision"] == "REJECTED"
+    assert agent.client.session.chat_calls == 3
+
+
+def test_the_parse_budget_still_bounds_a_run_of_garbled_replies(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv(thinking_log.ENV_OUT, str(tmp_path / "t.json"))
+    monkeypatch.setenv("LLM_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("LLM_TRANSPORT_ATTEMPTS", "4")
+    monkeypatch.setattr("agents.security_agent._backoff_delay", lambda n: 0.0)
+
+    # One transport failure then two unparsable replies: the transport budget
+    # is spent once, and the two garbage replies exhaust the parse budget of 2
+    # rather than being allowed to ride the larger one.
+    agent = make_agent(
+        [
+            RuntimeError("connection reset"),
+            reply("garbage"),
+            reply("garbage"),
+        ]
+    )
+    with pytest.raises(ValueError):
+        analyse(agent, id="sample-6")
+    assert agent.client.session.chat_calls == 3
+
+
+def test_a_timeout_gets_two_tries_even_with_transport_budget_left(
+    tmp_path, monkeypatch
+):
+    """A request that already burned the full timeout is not worth four."""
+    monkeypatch.setenv(thinking_log.ENV_OUT, str(tmp_path / "t.json"))
+    monkeypatch.setenv("LLM_MAX_ATTEMPTS", "2")
+    monkeypatch.setenv("LLM_TRANSPORT_ATTEMPTS", "4")
+    monkeypatch.setenv("LLM_TIMEOUT_ATTEMPTS", "2")
+    monkeypatch.setattr("agents.security_agent._backoff_delay", lambda n: 0.0)
+
+    agent = make_agent([TimeoutError("hung"), TimeoutError("hung")])
+    with pytest.raises(TimeoutError):
+        analyse(agent, id="sample-7")
+    assert agent.client.session.chat_calls == 2
+
+
+def test_a_parse_retry_restates_the_output_contract(tmp_path, monkeypatch):
+    """Sending the identical prompt again invites the identical bad reply."""
+    monkeypatch.setenv(thinking_log.ENV_OUT, str(tmp_path / "t.json"))
+    monkeypatch.setenv("LLM_MAX_ATTEMPTS", "2")
+
+    agent = make_agent([reply("here is my analysis:\n```json"), reply("{}")])
+    prompts: List[str] = []
+    original = agent.client.session.chat
+
+    def recording(session_id, **kwargs):
+        prompts.append(kwargs["parts"][0]["text"])
+        return original(session_id, **kwargs)
+
+    agent.client.session.chat = recording
+    analyse(agent, id="sample-8")
+
+    assert len(prompts) == 2
+    assert "could not be parsed as JSON" not in prompts[0]
+    assert "could not be parsed as JSON" in prompts[1]
+    assert "40 words or fewer" in prompts[1]
+
+
+def test_backoff_grows_exponentially_and_stops_at_twenty_seconds():
+    for attempt, ceiling in ((1, 2.0), (2, 4.0), (3, 8.0), (4, 16.0),
+                             (5, 20.0), (9, 20.0)):
+        delay = _backoff_delay(attempt)
+        assert 0.5 * ceiling <= delay <= ceiling, attempt
 
 
 # -- recorder plumbing ------------------------------------------------------

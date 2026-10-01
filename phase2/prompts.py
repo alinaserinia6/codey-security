@@ -30,6 +30,9 @@ Hard rules:
   Judge from `source_context` and the other evidence embedded here.
 - Never name a CWE you have no concrete reason to apply.
 - If the packet does not settle the question, say so instead of guessing.
+- Be terse. The packet already holds the code and the claim, so never quote
+  or restate them; write the shortest answer that still names the evidence.
+  Verbose fields cost tokens twice: once to generate, once to store.
 - Reply with a single valid JSON object and no other text.
 """.strip()
 
@@ -65,6 +68,10 @@ Return ONLY valid JSON with this schema:
 }}
 
 Use an empty list if the file contains nothing worth checking.
+
+A hypothesis is a pointer for the Verifier, not an essay: keep each `claim`
+under 15 words, and make `suspected_source`/`suspected_sink` a bare name
+(`sys.argv`, `os.system`), never a sentence.
 
 {_SHARED_RULES}
 """.strip()
@@ -111,6 +118,10 @@ REJECTED means the packet contradicts it or shows it is benign.
 UNCERTAIN means the packet does not settle it.
 Confidence must be between 0 and 1.
 
+Keep the verdict short: `explanation` is one sentence naming the decisive
+evidence (a line number or an identifier), `evidence` and `missing_evidence`
+hold at most three bare items each, and no field quotes a block of code back.
+
 {_SHARED_RULES}
 """.strip()
 
@@ -134,4 +145,7 @@ CONFIRMED means the supplied evidence is sufficient to support the finding.
 REJECTED means the evidence contradicts the finding or shows it is benign.
 UNCERTAIN means additional context is required.
 Confidence must be between 0 and 1.
+
+`rationale` is one sentence; `evidence` and `missing_evidence` hold at most
+three bare items each. Never quote a block of code back.
 """.strip()

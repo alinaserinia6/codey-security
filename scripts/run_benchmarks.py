@@ -278,6 +278,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         # lines. Set LLM_THINKING_PRINT=full (or short) to watch it anyway;
         # the full trace is written to the .thinking.json sidecar regardless.
         os.environ.setdefault("LLM_THINKING_PRINT", "off")
+        # The legs only agree on config if they read the same budget. The cap
+        # silently decides whether a long Scanner reply survives, so record
+        # what each leg will inherit: a .env edited mid-run otherwise leaves
+        # one leg on the built-in default (65536) and the others on the file.
+        budget = (
+            "LLM budget: "
+            f"max_tokens={os.environ.get('LLM_MAX_TOKENS', '4096 default')} "
+            f"cap={os.environ.get('LLM_MAX_TOKENS_CAP', '65536 default')} "
+            f"temperature={os.environ.get('LLM_TEMPERATURE', 'default')} "
+            f"effort={os.environ.get('LLM_REASONING_EFFORT', 'provider default')} "
+            "attempts transport/timeout/total="
+            f"{os.environ.get('LLM_TRANSPORT_ATTEMPTS', '4')}/"
+            f"{os.environ.get('LLM_TIMEOUT_ATTEMPTS', '2')}/"
+            f"{os.environ.get('LLM_MAX_ATTEMPTS', '2')}"
+        )
+        log(budget)
+        summary.append(budget)
         ok_llm, probe = llm_reachable()
         log(f"LLM endpoint: {probe}")
         summary.append(f"LLM endpoint: {probe}")
@@ -343,6 +360,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "C",
                     [sys.executable, "codey_security.py", "phase3"],
                     env={"PHASE2_INCLUDE_STRUCTURAL": "false",
+                         # The multi-agent legs size their worker pool from
+                         # PHASE2_CONCURRENCY; B honours --concurrency, and
+                         # without this C and D silently ran at 4.
+                         "PHASE2_CONCURRENCY": str(args.concurrency),
                          "SCENARIO_PHASE3_MODE": "phase2",
                          "SCENARIO_PHASE3_DATASET": str(subset),
                          "SCENARIO_PHASE3_LABEL": "static_llm",
@@ -361,6 +382,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "D",
                     [sys.executable, "codey_security.py", "phase3"],
                     env={"PHASE2_INCLUDE_STRUCTURAL": "true",
+                         "PHASE2_CONCURRENCY": str(args.concurrency),
                          "SCENARIO_PHASE3_MODE": "phase2",
                          "SCENARIO_PHASE3_DATASET": str(subset),
                          "SCENARIO_PHASE3_LABEL": "static_structural_llm",

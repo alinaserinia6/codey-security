@@ -359,3 +359,151 @@ def test_budget_escalation_gives_up_after_three_doublings():
         transport.chat("s", "u")
     budgets = [payload["max_tokens"] for _, payload in transport._client.calls]
     assert budgets == [4096, 8192, 16384, 32768]
+
+
+# -- reply parsing ---------------------------------------------------------
+#
+# The model quotes its own prose ("there is no "hole" in it"), which is
+# correct English and invalid JSON: the bare quote closes the value early and
+# a verdict the model had answered is discarded as unparsable. Every
+# unparsable reply in the recorded llm20 runs was this case.
+
+
+def test_unescaped_quotes_inside_a_value_are_repaired():
+    reply = (
+        '{"decision": "REJECTED", "confidence": 0.93, "cwe": [], '
+        '"explanation": "There is no "generator function" body here, so the '
+        'claim is not demonstrated.", "chain_verified": false}'
+    )
+    value = SecurityAgent._parse_json(reply)
+
+    assert value["decision"] == "REJECTED"
+    assert value["confidence"] == 0.93
+    assert (
+        value["explanation"]
+        == 'There is no "generator function" body here, so the claim is '
+        "not demonstrated."
+    )
+
+
+def test_a_literal_newline_inside_a_value_is_escaped():
+    reply = '{"decision": "UNCERTAIN", "explanation": "line one\nline two"}'
+    assert SecurityAgent._parse_json(reply)["explanation"] == "line one\nline two"
+
+
+def test_repair_leaves_valid_json_byte_for_byte_unchanged():
+    from agents.security_agent import _repair_json
+
+    valid = '{\n  "a": "say \\"hi\\" now",\n  "b": [1, {"c": "d"}]\n}'
+    assert _repair_json(valid) == valid
+
+
+def test_a_prose_preamble_is_stripped_before_repair():
+    reply = 'Sure! Here is the JSON:\n{"decision": "CONFIRMED", "confidence": 0.9}'
+    assert SecurityAgent._parse_json(reply)["decision"] == "CONFIRMED"
+
+
+def test_an_irreparable_reply_still_raises():
+    with pytest.raises(ValueError, match="invalid JSON"):
+        SecurityAgent._parse_json("no json here at all")
+
+
+# -- token spend -----------------------------------------------------------
+
+
+def test_envelope_returns_provider_usage():
+    body = {
+        "choices": [{"finish_reason": "stop", "message": {"content": "{}"}}],
+        "usage": {"prompt_tokens": 183, "completion_tokens": 61},
+    }
+    parts = envelope(body, max_tokens=4096)
+    assert parts["usage"]["prompt_tokens"] == 183
+
+
+def test_envelope_returns_empty_usage_when_the_provider_omits_it():
+    body = {"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]}
+    assert envelope(body, max_tokens=4096)["usage"] == {}
+
+
+def test_chat_sends_the_configured_reasoning_effort(monkeypatch):
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "minimal")
+    transport = OpenAICompat(base_url="https://api.apmix.ai/v1", model_id="m")
+    transport._client.close()
+    fake = _FakeClient(_finish("stop", "{}"))
+    transport._client = fake
+
+    transport.chat("s", "u")
+
+    assert fake.calls[0][1]["reasoning_effort"] == "minimal"
+
+
+def test_without_the_key_no_field_is_sent(monkeypatch):
+    monkeypatch.delenv("LLM_REASONING_EFFORT", raising=False)
+    transport = OpenAICompat(base_url="https://api.apmix.ai/v1", model_id="m")
+    transport._client.close()
+    fake = _FakeClient(_finish("stop", "{}"))
+    transport._client = fake
+
+    transport.chat("s", "u")
+
+    assert "reasoning_effort" not in fake.calls[0][1]
+
+
+def test_an_unsupported_reasoning_effort_is_dropped_for_the_run(monkeypatch):
+    # A provider that does not know the field answers 400 to every request.
+    # Losing the field must cost one request, not every sample of the run.
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "minimal")
+    transport = OpenAICompat(base_url="https://api.apmix.ai/v1", model_id="m")
+    transport._client.close()
+    fake = _SequenceClient(
+        _FakeResponse(
+            status_code=400, text='{"error": "unknown field reasoning_effort"}'
+        ),
+        _finish("stop", "{}"),
+    )
+    transport._client = fake
+
+    parts = transport.chat("s", "u")
+
+    assert parts["text"] == "{}"
+    assert "reasoning_effort" in fake.calls[0][1]
+    assert "reasoning_effort" not in fake.calls[1][1]
+    assert transport._effort_dropped is True
+    # The drop is sticky: the next sample never offers the field again.
+    transport.chat("s", "u")
+    assert len(fake.calls) == 3
+    assert "reasoning_effort" not in fake.calls[2][1]
+
+
+def test_usage_reaches_the_thinking_log(tmp_path, monkeypatch):
+    # What a run cost is exactly what a capped key makes you want to audit
+    # afterwards, so the provider's token accounting rides along in the trace.
+    out = tmp_path / "trace.thinking.json"
+    monkeypatch.setenv("LLM_THINKING_OUT", str(out))
+    monkeypatch.setenv("LLM_BASE_URL", "https://api.apmix.ai/v1")
+    monkeypatch.setenv("LLM_REASONING_EFFORT", "minimal")
+    agent = SecurityAgent()
+    agent._openai._client.close()
+    agent._openai._client = _FakeClient(
+        _FakeResponse(
+            payload={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": '{"decision": "REJECTED"}'},
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 40,
+                    "total_tokens": 160,
+                },
+            }
+        )
+    )
+
+    value = asyncio.run(agent.analyze({"file": "a.c", "role": "verifier"}))
+
+    assert value["decision"] == "REJECTED"
+    calls = json.loads(out.read_text())["files"]["a.c"]["calls"]
+    assert calls[0]["usage"]["total_tokens"] == 160
