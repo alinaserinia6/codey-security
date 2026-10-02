@@ -6,7 +6,7 @@
 #import "chapters/originality.typ"
 #import "chapters/acknowledgement.typ"
 #import "chapters/dedication.typ"
-#import "chapters/apstract.typ"
+#import "chapters/abstract.typ" as apstract
 
 #import "chapters/list-of-contents.typ"
 #import "chapters/list-of-figures.typ"

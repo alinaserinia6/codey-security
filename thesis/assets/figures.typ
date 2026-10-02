@@ -81,55 +81,55 @@
   #text(
     dir: rtl,
     diagram(
-      spacing: (1.1cm, 1.05cm),
+      spacing: (0.45cm, 0.9cm),
 
-      node((0, 2), rect(width: 120pt, height: 46pt, [
-        ابزارهای تحلیل ایستا
+      node((0, 1), rect(width: 92pt, height: 46pt, [
+        #text(size: 9.5pt)[ابزارهای تحلیل ایستا]
         \
-        #text(size: 9pt)[cppcheck، flawfinder، clang]
-        #v(8%)
+        #text(size: 8pt)[cppcheck، flawfinder، clang]
+        #v(4%)
       ])),
 
-      node((2, 2), rect(width: 110pt, height: 46pt, [
-        شواهد قطعی
+      node((1, 1), rect(width: 88pt, height: 46pt, [
+        #text(size: 9.5pt)[شواهد قطعی]
         \
-        ساختار، داده و یافته‌ها
-        #v(8%)
+        #text(size: 8pt)[ساختار، داده و یافته‌ها]
+        #v(4%)
       ])),
 
-      node((4, 2), rect(width: 110pt, height: 46pt, [
-        داوری چندعامله
+      node((2, 1), rect(width: 88pt, height: 46pt, [
+        #text(size: 9.5pt)[داوری چندعامله]
         \
-        جستجوگر و ارزیاب
-        #v(8%)
+        #text(size: 8pt)[جستجوگر و ارزیاب]
+        #v(4%)
       ])),
 
-      node((6, 2), rect(width: 105pt, height: 46pt, [
-        گزارش نهایی
+      node((3, 1), rect(width: 82pt, height: 46pt, [
+        #text(size: 9.5pt)[گزارش نهایی]
         \
-        تأییدشده‌ها
-        #v(8%)
+        #text(size: 8pt)[تأییدشده‌ها]
+        #v(4%)
       ])),
 
-      node((2, 0), rect(width: 220pt, height: 46pt, [
-        خروجی: مجموعه‌ای از یافته‌های تأییدشده
+      node((1.5, 0), rect(width: 165pt, height: 46pt, [
+        #text(size: 9.5pt)[خروجی: مجموعه‌ای از یافته‌های تأییدشده]
         \
-        به‌همراه دلیل و شواهد برای هر یک
-        #v(8%)
+        #text(size: 8pt)[به‌همراه دلیل و شواهد برای هر یک]
+        #v(4%)
       ])),
 
-      node((0, 0), rect(width: 120pt, height: 46pt, [
-        کاربر
+      node((0, 0), rect(width: 95pt, height: 46pt, [
+        #text(size: 9.5pt)[کاربر]
         \
-        #text(size: 9pt)[نیازمند هشدارهای کمتر و دقیق‌تر]
-        #v(8%)
+        #text(size: 8pt)[نیازمند هشدارهای کمتر و دقیق‌تر]
+        #v(4%)
       ])),
 
-      edge((0, 2), (2, 2), "-|>"),
-      edge((2, 2), (4, 2), "-|>"),
-      edge((4, 2), (6, 2), "-|>"),
-      edge((6, 2), (2, 0), "-|>"),
-      edge((2, 0), (0, 0), "<|-"),
+      edge((0, 1), (1, 1), "-|>"),
+      edge((1, 1), (2, 1), "-|>"),
+      edge((2, 1), (3, 1), "-|>"),
+      edge((3, 1), (1.5, 0), "-|>"),
+      edge((1.5, 0), (0, 0), "<|-"),
     ),
   )
   #text(

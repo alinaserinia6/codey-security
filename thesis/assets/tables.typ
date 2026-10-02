@@ -361,12 +361,12 @@
     ),
     [جولیت: هر مسیر], [#text(dir: ltr)[26/33]], [#text(dir: ltr)[274/267]], [#text(dir: ltr)[0.441]], [#text(dir: ltr)[0.087]], [#text(dir: ltr)[0.110]],
     [جولیت: بدون کاهش خطر], [#text(dir: ltr)[7/7]], [#text(dir: ltr)[293/293]], [#text(dir: ltr)[0.500]], [#text(dir: ltr)[0.023]], [#text(dir: ltr)[0.023]],
-    [جولیت: فلاویاب], [#text(dir: ltr)[13/10]], [#text(dir: ltr)[287/290]], [#text(dir: ltr)[0.565]], [#text(dir: ltr)[0.043]], [#text(dir: ltr)[0.033]],
+    [جولیت: فلافایندر], [#text(dir: ltr)[13/10]], [#text(dir: ltr)[287/290]], [#text(dir: ltr)[0.565]], [#text(dir: ltr)[0.043]], [#text(dir: ltr)[0.033]],
     [جولیت: اجتماع], [#text(dir: ltr)[13/11]], [#text(dir: ltr)[287/289]], [#text(dir: ltr)[0.542]], [#text(dir: ltr)[0.043]], [#text(dir: ltr)[0.037]],
     [دیویگن کامل: هر مسیر], [#text(dir: ltr)[971/894]], [#text(dir: ltr)[11454/13939]], [#text(dir: ltr)[0.521]], [#text(dir: ltr)[0.078]], [#text(dir: ltr)[0.060]],
     [دیویگن کامل: بدون کاهش خطر], [#text(dir: ltr)[861/783]], [#text(dir: ltr)[11564/14050]], [#text(dir: ltr)[0.524]], [#text(dir: ltr)[0.069]], [#text(dir: ltr)[0.053]],
     [دیویگن متوازن: شواهد], [#text(dir: ltr)[17/21]], [#text(dir: ltr)[283/279]], [#text(dir: ltr)[0.447]], [#text(dir: ltr)[0.057]], [#text(dir: ltr)[0.070]],
-    [دیویگن متوازن: فلاویاب], [#text(dir: ltr)[6/11]], [#text(dir: ltr)[294/289]], [#text(dir: ltr)[0.353]], [#text(dir: ltr)[0.020]], [#text(dir: ltr)[0.037]],
+    [دیویگن متوازن: فلافایندر], [#text(dir: ltr)[6/11]], [#text(dir: ltr)[294/289]], [#text(dir: ltr)[0.353]], [#text(dir: ltr)[0.020]], [#text(dir: ltr)[0.037]],
     [دیویگن متوازن: اجتماع], [#text(dir: ltr)[20/29]], [#text(dir: ltr)[280/271]], [#text(dir: ltr)[0.408]], [#text(dir: ltr)[0.067]], [#text(dir: ltr)[0.097]],
   ))
   #text(
