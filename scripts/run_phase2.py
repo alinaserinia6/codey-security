@@ -132,6 +132,7 @@ async def run(args: argparse.Namespace) -> int:
             merge_claims=not args.no_merge_claims,
             merge_findings=not args.no_merge_findings,
             claim_site_radius=args.claim_site_radius,
+            hedge_retries=args.hedge_retries,
         )
         pipeline = build_pipeline(
             config=config,
@@ -269,6 +270,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         default=5,
         help="line distance within which merged findings keep a line",
     )
+    parser.add_argument(
+        "--hedge-retries",
+        type=int,
+        default=1,
+        help="extra questions when the verifier answers UNCERTAIN "
+        "(0 = one question per hypothesis)",
+    )
     args = parser.parse_args(argv)
     # Validate numeric knobs up front so a typo fails fast with a clear
     # message instead of a cryptic Semaphore/asyncio error mid-run.
@@ -279,6 +287,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             parser.error(f"--{name.replace('_', '-')} must be a positive integer")
     if args.claim_site_radius < 0:
         parser.error("--claim-site-radius must be >= 0")
+    if args.hedge_retries < 0:
+        parser.error("--hedge-retries must be >= 0")
     if args.timeout is not None and not args.timeout > 0:
         parser.error("--timeout must be > 0")
     if not 0.0 <= args.min_confidence <= 1.0:

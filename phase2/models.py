@@ -71,6 +71,10 @@ class Verification:
     missing_evidence: List[str] = field(default_factory=list)
     source_location: Optional[str] = None
     chain_verified: bool = False
+    #: False when the reply did not contain a decision the schema knows, so a
+    #: hedge the model chose can be told apart from a reply that never
+    #: arrived. Only the first kind may be resolved into a verdict.
+    usable: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

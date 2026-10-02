@@ -37,6 +37,13 @@ Predictions are matched greedily against vulnerable ground-truth findings. The m
 
 Keep the matching policy fixed before evaluating competing methods.
 
+Two variants are reported side by side, both derived from the stored reports:
+CWE-strict (file + line + compatible CWE, the primary column and the corpus's
+own convention) and CWE-agnostic (file + line only, a localization
+diagnostic). Build the second with
+`scripts/recompute_result.py --no-cwe-match --out <dir> <results>`; never mix
+variants inside one table.
+
 ## Negative samples
 
 A benign sample is a real negative example. It is not merely a vulnerable sample on which a tool returned no finding.

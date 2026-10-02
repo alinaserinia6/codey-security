@@ -29,7 +29,6 @@ Hard rules:
   tools, so never ask for, or try to open, locate or list the source file.
   Judge from `source_context` and the other evidence embedded here.
 - Never name a CWE you have no concrete reason to apply.
-- If the packet does not settle the question, say so instead of guessing.
 - Be terse. The packet already holds the code and the claim, so never quote
   or restate them; write the shortest answer that still names the evidence.
   Verbose fields cost tokens twice: once to generate, once to store.
@@ -45,6 +44,15 @@ vulnerability hypothesis, including weak ones. A later Verifier Agent will
 discard the false alarms, so a missed hypothesis is far more costly here than
 an extra one.
 
+`static_tool_findings` are leads about this file, not claims to repeat. A tool
+rule fires on a pattern, not on a defect: `srand(time(NULL))` is a weak seed
+whether or not the randomness is ever used for anything that matters, and a
+`memcpy` is not an overflow because its length is a variable. Raise a tool
+finding as a hypothesis only when the code shows the operation is actually
+reachable and actually wrong, and when you do, say in the claim what makes it
+wrong -- a hypothesis that adds nothing to the tool's line is not a hypothesis.
+Prefer claims the tools did not report; they are the ones the tools missed.
+
 Look for at least:
 - command injection, code injection and template injection
 - buffer overflows and integer overflows
@@ -52,7 +60,10 @@ Look for at least:
 - path traversal and SQL injection
 
 For each hypothesis give the CWE you suspect, the line to inspect, and a one
-sentence claim describing the source and the sink.
+sentence claim describing the source and the sink. Name the most specific CWE
+that fits what the code does rather than an umbrella class. The class you name
+is the class the report will carry: name the defect you are pointing at, not a
+related one.
 
 Return ONLY valid JSON with this schema:
 {{
@@ -67,7 +78,8 @@ Return ONLY valid JSON with this schema:
   ]
 }}
 
-Use an empty list if the file contains nothing worth checking.
+Use an empty list if the file contains nothing worth checking: an unresolved
+question is a reason to propose nothing, never a reason to invent a claim.
 
 A hypothesis is a pointer for the Verifier, not an essay: keep each `claim`
 under 15 words, and make `suspected_source`/`suspected_sink` a bare name
@@ -84,21 +96,36 @@ with the evidence packet: source context, structural analysis, static-tool
 output, and any source-to-sink path recovered by the dataflow tracker.
 
 You are the last gate before a finding reaches the report, so you REJECT BY
-DEFAULT. Confirm a hypothesis only when the packet establishes the claim. In
-particular, for an injection or overflow claim, confirm only if you can point
-at a concrete source and a concrete sink and the packet shows the value moving
-between them.
+DEFAULT. Confirm only when you can point at the code in `source_context` and
+say what makes it wrong.
+
+Decide about THIS hypothesis. The hypothesis is the only claim on trial. A
+static-tool finding in the packet is a lead about the code, never the claim: if
+you find yourself confirming something the Scanner did not propose, you are
+answering a different question -- reject and name the hypothesis you were given.
+For the same reason, report the class the hypothesis names unless the evidence
+sharpens it inside the same family.
+
+Judge the code, not the tracker:
+- `dataflow_chains` is best-effort and per-function. An empty list means the
+  tracker found no path, NOT that the code is safe; do not reject a hypothesis
+  you can see is wrong in the snippet just because the tracker is silent.
+- A chain whose origin is "parameter" is normal for a function-level unit --
+  the tracker cannot see who calls it. Treat it as unproven, not as proof.
+- What the tracker DID find counts against a confirmation: a "mitigated" flag
+  with its stated bound, a constant or literal argument, a bounded copy whose
+  length does not depend on caller data.
 
 Treat these as evidence *against* a confirmation:
 - the "mitigated" flag on a dataflow chain, with a stated bound
 - a value that is a constant rather than attacker-controlled
 - a bounded copy whose length does not depend on attacker data
 - a call whose argument is a literal
+- a guard, bound or size check that covers the operation on the line in front of
+  you -- including one a few lines earlier on the same path
 
-A chain with an empty source means the tracker found no path; that alone is not
-proof of safety, but you may not confirm on it without other concrete evidence.
-A chain whose origin is "parameter" means the tracker could not see where the
-value came from, so state that uncertainty explicitly.
+When the code is in front of you and you can name the defect, CONFIRM even
+without a recovered chain. When you can name why the code is safe, REJECT.
 
 Return ONLY valid JSON with this schema:
 {{
@@ -113,9 +140,19 @@ Return ONLY valid JSON with this schema:
   "chain_verified": true | false
 }}
 
-CONFIRMED means the packet supports the hypothesis.
-REJECTED means the packet contradicts it or shows it is benign.
-UNCERTAIN means the packet does not settle it.
+Decide: the report needs a verdict, so pick exactly one of the three.
+- CONFIRMED: the code in `source_context` establishes the claim -- the
+  dangerous operation, the length or value that reaches it, and why nothing on
+  the path bounds it. Set `chain_verified: true` to mean "I established this
+  from the evidence in front of me", whether or not the tracker supplied a path.
+- REJECTED: the code does not establish it. A guard, a bound, a constant or a
+  tracked-but-mitigated path are each a reason to reject.
+- UNCERTAIN: only when the packet does not contain the code the hypothesis is
+  about, so neither verdict could be grounded at all.
+
+"The packet does not settle it" is a REJECTED, never an UNCERTAIN. Hedging
+over code you can read is the one thing you may not do: if the line the
+hypothesis names is in front of you, answer CONFIRMED or REJECTED.
 Confidence must be between 0 and 1.
 
 Keep the verdict short: `explanation` is one sentence naming the decisive
@@ -123,6 +160,18 @@ evidence (a line number or an identifier), `evidence` and `missing_evidence`
 hold at most three bare items each, and no field quotes a block of code back.
 
 {_SHARED_RULES}
+""".strip()
+
+#: Re-sent inside the packet when the verifier answers UNCERTAIN, or answers
+#: with no usable decision field. One extra question is cheaper than leaving
+#: a hypothesis the model has already read without a verdict, and it is the
+#: only place a model can be told that hedging does not stand.
+VERIFIER_NUDGE = """
+Your previous reply to this same packet was "{previous}", so the hypothesis is
+still undecided. Answer it again from the JSON schema: CONFIRMED if the packet
+establishes the claim, REJECTED if it does not, and UNCERTAIN only if the
+packet does not contain the code the hypothesis names. Do not repeat your
+previous explanation; give the verdict.
 """.strip()
 
 SECURITY_PROMPT = """

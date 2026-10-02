@@ -9,7 +9,7 @@ __pycache__/
 htmlcov/
 .env
 .DS_Store
-results/*.json
+results/**/*.json
 results/*.jsonl
 results/*.csv
 results/*.html

@@ -10,7 +10,7 @@ from agents import thinking_log
 from .context import load_source_context
 from .llm import Phase2LLM
 from .models import AgentAssessment, FinalDecision, Phase2Report
-from .sanitize import sanitize_value
+from .sanitize import sanitize_packet
 
 
 @dataclass
@@ -117,9 +117,10 @@ class Phase2Pipeline:
                 packet["structural"] = report.get("metadata", {}).get(
                     "structure", {}
                 )
-            # Neutralise scenario identifiers in every textual field so the
-            # agent cannot read the label out of the evidence packet.
-            packet = sanitize_value(packet)
+            # Neutralise scenario identifiers and label-bearing paths in
+            # every field so the agent cannot read the label out of the
+            # evidence packet.
+            packet = sanitize_packet(packet)
 
             try:
                 with thinking_log.scope(id=source, file=source, role="security"):

@@ -13,6 +13,16 @@ tell that the numbers were recomputed rather than freshly measured.
 Usage:
     python scripts/recompute_result.py results/exp_C_static_llm_subset600.json
     python scripts/recompute_result.py --dataset datasets/vulnllm_r_c.json results/*.json
+
+Two matching protocols are reported. ``SCENARIO_PHASE3_REQUIRE_CWE=true``
+(strict, the default a run is made with) demands that a finding's CWE match
+the ground-truth CWE; it is the corpus's own CWE-strict convention. The
+CWE-agnostic variant scores file + line only and shows how much of a result is
+lost to vocabulary mismatch between the tools and the labels. Both are derived
+from the same stored reports, so the second table costs no model calls:
+
+    python scripts/recompute_result.py --no-cwe-match --out results/agnostic \
+        results/exp_vulnllm_r_c_static.json
 """
 from __future__ import annotations
 
@@ -54,7 +64,8 @@ def _rebuild_predictions(entry: dict, sample_id: str) -> list:
     return predictions_from_phase1(_phase1_of(entry), sample_id)
 
 
-def recompute(path: Path, dataset_path: Path | None) -> dict:
+def recompute(path: Path, dataset_path: Path | None,
+              require_cwe: bool | None = None) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     provenance = (payload.get("metadata", {}) or {}).get("provenance", {}) or {}
 
@@ -79,9 +90,11 @@ def recompute(path: Path, dataset_path: Path | None) -> dict:
             _rebuild_predictions(entry, entry.get("sample_id", ""))  # type: ignore[arg-type]
         )
 
+    strict = (bool(provenance.get("require_cwe_match", True))
+              if require_cwe is None else require_cwe)
     cfg = MatchConfig(
         line_tolerance=int(provenance.get("line_tolerance", 5)),
-        require_cwe_when_available=bool(provenance.get("require_cwe_match", True)),
+        require_cwe_when_available=strict,
     )
     result = evaluate(
         payload.get("experiment", path.stem),
@@ -98,6 +111,12 @@ def recompute(path: Path, dataset_path: Path | None) -> dict:
     )
     prov["metrics_recomputed_from"] = "metadata.reports"
     prov["dataset"] = str(ds_path)
+    # Make the variant legible in the file itself: a strict table and an
+    # agnostic table must never be mistaken for each other downstream.
+    prov["matching_variant"] = (
+        "cwe_agnostic" if not strict else
+        prov.get("matching_variant", "cwe_strict")
+    )
     refreshed["metadata"]["provenance"] = prov
     # keep the human-readable run label if the original run had one
     label = (payload.get("metadata", {}) or {}).get("provenance", {}).get("label")
@@ -114,6 +133,12 @@ def main() -> None:
         help="override the dataset recorded in each result's provenance",
     )
     ap.add_argument(
+        "--no-cwe-match",
+        action="store_true",
+        help="score file + line only (CWE-agnostic secondary table) instead "
+             "of the run's own matching policy",
+    )
+    ap.add_argument(
         "--out",
         help="write refreshed results to this directory (default: in place)",
     )
@@ -121,7 +146,11 @@ def main() -> None:
 
     for name in args.results:
         src = Path(name)
-        refreshed = recompute(src, Path(args.dataset) if args.dataset else None)
+        refreshed = recompute(
+            src,
+            Path(args.dataset) if args.dataset else None,
+            require_cwe=False if args.no_cwe_match else None,
+        )
         dest = src if not args.out else Path(args.out) / src.name
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(
@@ -130,8 +159,12 @@ def main() -> None:
         )
         m = refreshed["metrics"]
         sl = refreshed["metadata"]["sample_level"]
+        variant = refreshed["metadata"]["provenance"].get(
+            "matching_variant", "cwe_strict"
+        )
         print(
-            f"{dest.name}: tp={m['confusion']['tp']} fp={m['confusion']['fp']} "
+            f"{dest.name} [{variant}]: "
+            f"tp={m['confusion']['tp']} fp={m['confusion']['fp']} "
             f"P={m['precision']:.4f} R={m['recall']:.4f} F1={m['f1']:.4f} "
             f"benign_flag={sl['benign_flag_rate']:.4f}"
         )

@@ -332,6 +332,10 @@ def build_llm_steps(args, names: List[str], results: Path,
             "env": {"LLM_THINKING_OUT":
                     str(results / f"exp_{tag}_B_llm_only.thinking.json")},
             "timeout": 10800,
+            # The row lives on B-eval (metrics only exist after it runs), so
+            # without this the prediction step's minutes would be reported as
+            # the eval step's seconds: B looked like "ok (0s)".
+            "part_of": "B",
         })
         be_args = [sys.executable, "scripts/evaluate_llm_only.py",
                    "--dataset", str(subset), "--predictions", str(pred),
@@ -554,6 +558,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("===== END DRY RUN =====")
         return 0
 
+    # A row that is printed by a later step (B is scored by B-eval) also owes
+    # the earlier step's wall time, otherwise the expensive part of a leg is
+    # reported as zero.
+    pending_parts: Dict[str, float] = {}
+
     for step in steps:
         if step.get("skip"):
             summary.append(f"{step.get('row', step['name'])}: skipped "
@@ -562,6 +571,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             continue
         ok, elapsed, tail = run_step(step["name"], step["argv"],
                                      step.get("env"), step.get("timeout"))
+        part = step.get("part_of")
+        if part and not step.get("row"):
+            pending_parts[part] = pending_parts.get(part, 0.0) + elapsed
+            if not ok:
+                failures += 1
+            log(f"{step['name']}: {'ok' if ok else 'FAILED'} in {elapsed:.0f}s")
+            continue
         if step.get("filter_out"):
             if not ok:
                 failures += 1
@@ -570,8 +586,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not ok:
             failures += 1
         if step.get("row"):
+            # A row printed by a later step owes the earlier step's wall time:
+            # B is scored by B-eval, and reporting only the eval step made the
+            # expensive leg look like "ok (0s)".
+            pending = pending_parts.pop(part, 0.0) if part else 0.0
+            shown = elapsed + pending
+            when = (f"{shown:.0f}s = {pending:.0f}s predict + "
+                    f"{elapsed:.0f}s eval" if pending else f"{shown:.0f}s")
             row = (f"{step['row']}: {'ok' if ok else 'FAILED'} "
-                   f"({elapsed:.0f}s) "
+                   f"({when}) "
                    f"{fmt_row(read_metrics(step['out'])) if ok and step.get('out') else tail[-1]}")
             summary.append(row)
         elif step.get("summary"):

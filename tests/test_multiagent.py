@@ -323,24 +323,112 @@ def test_low_confidence_confirmation_is_downgraded(tmp_path):
     assert "below threshold" in result["decisions"][0]["rationale"]
 
 
-def test_uncertain_is_not_reported(tmp_path):
+def test_uncertain_is_asked_again_then_resolved(tmp_path):
+    """A hedge is re-asked once and, if it persists, becomes a rejection.
+
+    ``UNCERTAIN`` is scored as a miss, so a model that shrugs at code it has
+    read pays recall for being cautious rather than wrong. The pipeline asks
+    again with the contract spelled out; a hedge with no verified path still
+    has nothing to report, and the report must show a verdict, not a shrug.
+    """
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "x"}]},
+        [{"decision": "UNCERTAIN", "confidence": 0.5}] * 2,
+    )
+    result = run(agent, phase1_report(path))
+
+    verifier = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier) == 2, "the hedge must be asked once more"
+    assert "correction" in verifier[1], "the repeat question states the contract"
+    assert "UNCERTAIN" in verifier[1]["correction"]
+    assert result["findings"] == []
+    assert result["decisions"][0]["status"] == "REJECTED"
+    assert "hedge resolved" in result["decisions"][0]["rationale"]
+
+
+def test_hedge_over_a_verified_path_is_put_forward(tmp_path):
+    """A hedge that reports the path verified is a confirmation the gates judge.
+
+    ``chain_verified: true`` *is* the claim a confirmation makes, so a model
+    that hedges while asserting it has not contradicted the packet -- it has
+    only declined to press the conclusion. Promotion still leaves the
+    deterministic gates (chain in the file, minimum confidence) to decide.
+    """
+    path = write(tmp_path, VULNERABLE)
+    hedge = {"decision": "UNCERTAIN", "confidence": 0.9, "chain_verified": True,
+             "explanation": "path from sys.argv to subprocess.run is visible"}
+    agent = StubAgent(
+        {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "x"}]},
+        [dict(hedge), dict(hedge)],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["decisions"][0]["status"] == "CONFIRMED"
+    assert "hedge resolved" in result["decisions"][0]["rationale"]
+    assert len(result["findings"]) == 1
+
+
+def test_hedge_retries_zero_asks_once(tmp_path):
     path = write(tmp_path, VULNERABLE)
     agent = StubAgent(
         {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "x"}]},
         [{"decision": "UNCERTAIN", "confidence": 0.5}],
     )
-    result = run(agent, phase1_report(path))
+    result = run(agent, phase1_report(path), hedge_retries=0)
+
+    verifier = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier) == 1
     assert result["findings"] == []
-    assert result["decisions"][0]["status"] == "UNCERTAIN"
+    assert result["decisions"][0]["status"] == "REJECTED"
 
 
-def test_unknown_decision_falls_back_to_uncertain(tmp_path):
+def test_decisive_verdict_is_never_re_asked(tmp_path):
+    """The repeat question costs a model call, so it is spent only on a hedge."""
+    path = write(tmp_path, BENIGN)
+    agent = StubAgent(
+        {"hypotheses": [{"cwe": "CWE-78", "line": 4, "claim": "x"}]},
+        [{"decision": "REJECTED", "confidence": 0.95, "explanation": "literal arg"}],
+    )
+    result = run(agent, phase1_report(path))
+
+    verifier = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier) == 1
+    assert result["decisions"][0]["status"] == "REJECTED"
+
+
+def test_retry_answer_replaces_the_hedge(tmp_path):
+    """When the second answer decides, the report shows that verdict."""
     path = write(tmp_path, VULNERABLE)
     agent = StubAgent(
         {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "x"}]},
-        [{"decision": "MAYBE", "confidence": 0.9}],
+        [
+            {"decision": "UNCERTAIN", "confidence": 0.4},
+            {"decision": "REJECTED", "confidence": 0.9, "explanation": "constant arg"},
+        ],
     )
     result = run(agent, phase1_report(path))
+
+    assert result["findings"] == []
+    assert result["decisions"][0]["status"] == "REJECTED"
+    assert result["decisions"][0]["rationale"] == "constant arg"
+
+
+def test_unknown_decision_stays_uncertain(tmp_path):
+    """A reply with no verdict is not evidence of safety.
+
+    It is asked again like any other hedge, and what it never said cannot be
+    resolved into one: an unanswered question stays open in the report.
+    """
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {"hypotheses": [{"cwe": "CWE-78", "line": 6, "claim": "x"}]},
+        [{"decision": "MAYBE", "confidence": 0.9}] * 2,
+    )
+    result = run(agent, phase1_report(path))
+
+    verifier = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier) == 2
     assert result["findings"] == []
     assert result["decisions"][0]["status"] == "UNCERTAIN"
 

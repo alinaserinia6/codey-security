@@ -508,6 +508,35 @@ def test_vulnllm_r_groups_files_by_cwe_and_verdict(tmp_path):
     assert bad["related_cwe"] == ["CWE-119"]
 
 
+def test_vulnllm_r_repeated_idx_gets_distinct_sample_ids(tmp_path):
+    """``idx`` repeats across rows of the source corpus.
+
+    Two rows sharing one sample_id make the evaluator score both of them from
+    a single prediction set, which silently shifts TN and the benign flag rate
+    away from the sample counts printed next to them.
+    """
+    rows = [
+        {"idx": 7, "language": "c", "function_name": "alpha",
+         "code": "void alpha(){}", "target": 0,
+         "CWE_ID": ["CWE-20"], "RELATED_CWE": []},
+        {"idx": 7, "language": "c", "function_name": "beta",
+         "code": "void beta(){}", "target": 0,
+         "CWE_ID": ["CWE-125"], "RELATED_CWE": []},
+        {"idx": 8, "language": "c", "function_name": "gamma",
+         "code": "void gamma(){}", "target": 1,
+         "CWE_ID": ["CWE-120"], "RELATED_CWE": []},
+    ]
+    corpus = tmp_path / "vr.json"
+    corpus.write_text(json.dumps(rows))
+    payload = load_vulnllm_r(corpus, out_dir=tmp_path / "vr")
+    ids = sorted(s["sample_id"] for s in payload["samples"])
+    assert ids == [
+        "vulnllmr_function_level_7_good",
+        "vulnllmr_function_level_7_good_2",
+        "vulnllmr_function_level_8_bad",
+    ]
+
+
 def test_vulnllm_r_leaves_java_out_of_a_scored_manifest(tmp_path):
     """No analyzer in this project reads Java; scoring it would count every
     sample as a miss for reasons unrelated to detection."""

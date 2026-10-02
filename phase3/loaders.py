@@ -979,6 +979,7 @@ def load_vulnllm_r(
     vuln: List[Dict[str, Any]] = []
     benign: List[Dict[str, Any]] = []
     seen: set[str] = set()
+    used_ids: set[str] = set()
     skipped_empty = 0
     skipped_no_cwe = 0
     skipped_language = 0
@@ -1015,11 +1016,21 @@ def load_vulnllm_r(
         func_name = str(record.get("function_name", "") or f"func{index}")
         stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", func_name)[:60].strip("_") or "func"
         group = f"{options.split}/{language}/{cwe_dir}/{variant}"
+        # ``idx`` is not unique in the corpus (two functions can share it), and
+        # a colliding sample_id makes the evaluator score both rows from one
+        # prediction set, which silently shifts TN and the benign flag rate.
+        base_id = f"vulnllmr_{options.split}_{record.get('idx', index)}_{variant}"
+        sample_id = base_id
+        duplicate = 2
+        while sample_id in used_ids:
+            sample_id = f"{base_id}_{duplicate}"
+            duplicate += 1
+        used_ids.add(sample_id)
         sample = {
             "_source": source,
             "_stem": stem,
             "_groupdir": group,
-            "sample_id": f"vulnllmr_{options.split}_{record.get('idx', index)}_{variant}",
+            "sample_id": sample_id,
             "vulnerable": vulnerable,
             "cwe": cwes,
             "language": language,

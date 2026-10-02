@@ -425,6 +425,35 @@ balanced accuracy, positive/negative support, and per-CWE results.
 explicit benign/negative sample population. Do not report a single FPR from a
 vulnerable-only dataset.
 
+### Two matching protocols, reported side by side
+
+Matching runs in two variants, both scored from the same stored reports, so
+the second column never costs a re-run:
+
+| variant | rule | what it answers |
+|---|---|---|
+| **CWE-strict** (primary, `SCENARIO_PHASE3_REQUIRE_CWE=true`) | file + line + compatible CWE | the corpus's own CWE-strict convention (VulnLLM-R reports it too) |
+| CWE-agnostic (secondary) | file + line | pure localization, independent of CWE vocabulary |
+
+The gap is large and it is a property of the labels, not of the analyzers: on
+`vulnllm_r_c` only ~31% of ground-truth CWEs are ever emitted by any of the
+tools (the tools shout `CWE-327`/`CWE-120`, the labels say
+`CWE-476`/`CWE-787`/`CWE-125`), so strict recall is capped near that value.
+Static-tool rows read about `.13/.16` (mean P/R) strict and `.28/.36`
+agnostic; the deterministic taint evidence averages `.55/.32` strict.
+
+Generate the secondary table from any result file without touching the
+primary one:
+
+```bash
+python scripts/recompute_result.py --no-cwe-match --out results/agnostic \
+    results/exp_vulnllm_r_c_static.json
+```
+
+Every protocol choice applies to **all** legs (A–E) of a comparison; never
+mix variants across rows of one table, and never select a variant after
+looking at the test set without saying so in the write-up.
+
 ---
 
 ## Recommended research experiments
@@ -474,6 +503,16 @@ python scripts/run_benchmarks.py --suite llm --llm-source vulnllm_r_python \
 
 # pick individual legs inside a suite
 python scripts/run_benchmarks.py --suite llm --legs C,D --tag ablate_cd
+```
+
+For a run against the local jev OpenCode server (slow: ~5 min/sample end to
+end, so overnight), `scripts/run_llm_jev.sh` presets the endpoint, the model,
+the tags and a time estimate:
+
+```bash
+scripts/run_llm_jev.sh small --dry-run   # preview, ~1 h run
+scripts/run_llm_jev.sh small             # 12-sample ladder on one dataset
+scripts/run_llm_jev.sh all --limit 20    # every dataset, ~12 h
 ```
 
 Each step streams its own output as `[<step>] ...` lines, and the run ends

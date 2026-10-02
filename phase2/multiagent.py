@@ -20,7 +20,7 @@ LLM client so the orchestration can be tested end to end without a model.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -39,8 +39,8 @@ from .models import (
     ReportFinding,
     Verification,
 )
-from .prompts import SCANNER_PROMPT, VERIFIER_PROMPT
-from .sanitize import sanitize_value
+from .prompts import SCANNER_PROMPT, VERIFIER_NUDGE, VERIFIER_PROMPT
+from .sanitize import sanitize_packet, sanitize_value
 
 JsonClient = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
 
@@ -71,7 +71,30 @@ class MultiAgentConfig:
     # "confirm the source-to-sink path" by describing one it never saw, which
     # would undo the precision the evidence chain exists to provide. Classes
     # the engine does not model are exempt: there is no chain to check.
+    # The gate needs something to disagree *with*: when the engine recovered no
+    # path at all for the file it has said nothing, so the gate stands down and
+    # the model's own evidence decides. See ``_evidence_gate``.
     require_chain_evidence: bool = True
+
+    # A scanner hypothesis that restates a Phase 1 tool finding verbatim (same
+    # class, same line) is not an independent claim, and confirming it puts a
+    # second copy of a tool signal into the Phase 2 report. Turn this off to
+    # let those through as ordinary hypotheses.
+    drop_tool_echoes: bool = True
+
+    # The Verifier is asked to confirm the hypothesis it was handed, so the class
+    # the report carries is the one that was proposed; the verifier may sharpen
+    # it inside its family but may not rename the defect to an unrelated one.
+    # Turn this off to let the verifier's own class always win, which is what
+    # it did before and what makes a confirmed hypothesis able to be filed
+    # under a class the Scanner never proposed.
+    report_verified_class: bool = True
+
+    # The report names the file under analysis rather than the path the verifier
+    # echoed back. Turn this on to take the model's ``source_location`` at face
+    # value; the packet it was answered from has had its paths scrubbed, so what
+    # comes back is a neutralised path and not the file.
+    model_owns_location: bool = False
 
     # A chain whose mitigation the engine recognised is evidence the finding is
     # already handled. The verifier is told about it and can still confirm for
@@ -94,6 +117,13 @@ class MultiAgentConfig:
     # merged report entry may claim -- a merge spanning more than this reports
     # no line rather than an arbitrary one.
     claim_site_radius: int = 5
+
+    # How often a hedged (or unparseable) verdict is asked again before the
+    # pipeline decides what the hedge was worth. Models differ wildly in how
+    # readily they say UNCERTAIN: one answers with verdicts, another with a
+    # shrug over code it has plainly read, and an uncounted shrug is scored
+    # as a miss. 0 keeps a single question per hypothesis.
+    hedge_retries: int = 1
 
 
 class MultiAgentPipeline:
@@ -146,11 +176,29 @@ class MultiAgentPipeline:
             scanner_failed = True
             hypotheses = []
 
-        if not hypotheses and scanner_failed:
+        proposed = len(hypotheses)
+        if self.cfg.drop_tool_echoes:
+            dropped = self._tool_echoes(hypotheses, report)
+            if dropped:
+                result.metadata["tool_echo_hypotheses"] = [
+                    {"id": h.id, "cwe": h.cwe, "line": h.line} for h in dropped
+                ]
+                echoes = {h.id for h in dropped}
+                hypotheses = [h for h in hypotheses if h.id not in echoes]
+
+        if not hypotheses and (scanner_failed or proposed):
             # A dropped connection must not read as "this file is clean" when
             # the tools already flagged it: the tool findings are exactly what
             # the scanner was going to reason about, so they are handed to the
             # verifier instead of the sample being lost.
+            #
+            # The second half of the condition matters as much as the first. A
+            # scanner that answers with an empty list after its request timed
+            # out has not judged the file, it has failed to answer, and scoring
+            # that as "nothing here" turns a transport failure into a negative
+            # sample. ``proposed > 0`` with an empty remainder can only happen
+            # when every hypothesis was an echo, and in that case the echo list
+            # itself is the right thing to verify.
             hypotheses = self._fallback_hypotheses(report)
             if hypotheses:
                 result.metadata["scanner_fallback"] = True
@@ -270,6 +318,59 @@ class MultiAgentPipeline:
             if outcome[0].status == "CONFIRMED":
                 break
         return out
+
+    @staticmethod
+    def _tool_echoes(
+        hypotheses: List[Hypothesis], report: Dict[str, Any]
+    ) -> List[Hypothesis]:
+        """Hypotheses that only restate a static-tool finding already in hand.
+
+        The Scanner is shown ``static_tool_findings``, and it reads them as
+        leads: given Flawfinder's ``srand`` rule it proposes "CWE-327 at the
+        line Flawfinder flagged". That is not an independent claim. Phase 1
+        already reports the tool's finding, so verifying it again adds a second
+        copy of the same signal to the Phase 2 report and nothing else -- and
+        the copy is counted as the pipeline's own detection.
+
+        It is worse than a duplicate. A tool rule that fires on a pattern every
+        file in the corpus happens to contain (``srand(time(NULL))`` in a shared
+        preamble, a ``memset`` fill value) produces the same hypothesis on
+        vulnerable and benign files alike, so the echoes crowd the report while
+        the scanner's real claims compete with them for the verifier's budget.
+        On the function-level C benchmark these were the majority of all
+        confirmed Phase 2 findings.
+
+        Only an exact restatement is dropped: same class, same line as a tool
+        finding the packet carries. A hypothesis that names a line the tools
+        did not flag, or a class they did not report, is the scanner's own and
+        is left alone -- including when it argues with the tools.
+        """
+        echo: List[Hypothesis] = []
+        for hypothesis in hypotheses:
+            if hypothesis.cwe and MultiAgentPipeline._echoed_by_tool(hypothesis, report):
+                echo.append(hypothesis)
+        return echo
+
+    @staticmethod
+    def _echoed_by_tool(hypothesis: Hypothesis, report: Dict[str, Any]) -> bool:
+        if hypothesis.line is None:
+            return False
+        for finding in report.get("findings") or []:
+            if not isinstance(finding, dict):
+                continue
+            line = finding.get("line")
+            try:
+                line = int(line) if line is not None else None
+            except (TypeError, ValueError):
+                continue
+            if line is None or line != hypothesis.line:
+                continue
+            cwe = finding.get("cwe") or ""
+            if isinstance(cwe, (list, tuple)):
+                cwe = cwe[0] if cwe else ""
+            if str(cwe).strip().upper() == hypothesis.cwe.upper():
+                return True
+        return False
 
     @staticmethod
     def _fallback_hypotheses(report: Dict[str, Any]) -> List[Hypothesis]:
@@ -412,6 +513,12 @@ class MultiAgentPipeline:
         Taint chains are attached here as well as in the verifier packet: the
         scanner needs to know where a path already exists so it does not spend
         its whole budget rediscovering it, and the chains carry no labels.
+
+        ``source`` and every path a chain carries name the sample's directory
+        and file, and on a labelled benchmark those spell out the answer
+        (``.../CWE-787/bad/func1147_bad_<hash>.c``). :func:`sanitize_packet`
+        strips them, which is why the unsanitised path is threaded through to
+        :meth:`_context_at` explicitly rather than read back out of the packet.
         """
         metadata = report.get("metadata", {}) or {}
         packet: Dict[str, Any] = {
@@ -429,7 +536,7 @@ class MultiAgentPipeline:
         if self.cfg.include_taint:
             packet["dataflow_chains"] = self._taint_chains(source, metadata)
 
-        return sanitize_value(packet)
+        return sanitize_packet(packet)
 
     @staticmethod
     def _parse_hypotheses(raw: Any) -> List[Hypothesis]:
@@ -473,6 +580,10 @@ class MultiAgentPipeline:
         async with self._sem:
             chains = self._chains_near(scan_packet, hypothesis.line)
             proven = [c for c in chains if c.get("source_expression")]
+            # Whether the dataflow engine had anything to say about this file at
+            # all. Its silence and its disagreement are different facts and the
+            # evidence gate is only allowed to treat the second as evidence.
+            engine_silent = not (scan_packet.get("dataflow_chains") or [])
             packet: Dict[str, Any] = {
                 "role": "verifier",
                 "language": scan_packet.get("language"),
@@ -495,54 +606,176 @@ class MultiAgentPipeline:
                 if nearby:
                     packet["static_tool_findings"] = nearby
 
-            packet = sanitize_value(packet)
-            try:
-                with thinking_log.scope(
-                    id=source, file=source, role="verifier", hypothesis=hypothesis.id
-                ):
-                    raw = await self.ask_json(VERIFIER_PROMPT, packet)
-            except Exception as exc:  # noqa: BLE001
-                result.errors.append(
-                    f"verifier[{hypothesis.id}]: {type(exc).__name__}: {exc}"
-                )
+            packet = sanitize_packet(packet)
+            verification = await self._ask_verifier(
+                hypothesis, packet, source, result
+            )
+            if verification is None:
                 return None
 
-            verification = self._parse_verification(raw)
-            if verification.decision != "CONFIRMED":
-                return self._rejection(hypothesis, verification), None
+            return self._decide(
+                hypothesis,
+                self._resolve_hedge(verification),
+                chains,
+                engine_silent,
+                source,
+                proven=proven,
+            )
 
-            reason = self._evidence_gate(hypothesis, verification, proven)
-            if reason:
-                return (
-                    self._rejection(hypothesis, verification, reason=reason),
-                    None,
-                )
+    def _decide(
+        self,
+        hypothesis: Hypothesis,
+        verification: Verification,
+        chains: Sequence[Dict[str, Any]],
+        engine_silent: bool,
+        source: str = "",
+        *,
+        proven: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> Optional[Tuple[FinalDecision, Optional[ReportFinding]]]:
+        """Turn one verdict into the decision it earns, and its finding.
 
-            if verification.confidence < self.cfg.min_confidence:
-                # A confirmation the verifier itself does not stand behind is
-                # downgraded rather than reported.
-                return (
-                    self._rejection(
-                        hypothesis,
-                        verification,
-                        reason=(
-                            f"confidence {verification.confidence:.2f} below "
-                            f"threshold {self.cfg.min_confidence:.2f}"
-                        ),
+        Split out of :meth:`_verify_one` so the accept/drop half of the pipeline
+        can be exercised against recorded verdicts without a transport (see
+        ``scripts/replay_thinking.py``). ``None`` means the question was never
+        answered, which is the one case that stops a claim walk.
+        """
+        if proven is None:
+            proven = [c for c in chains if c.get("source_expression")]
+
+        if verification.decision != "CONFIRMED":
+            return self._rejection(hypothesis, verification), None
+
+        reason = self._evidence_gate(
+            hypothesis, verification, proven, engine_silent=engine_silent
+        )
+        if reason:
+            return (
+                self._rejection(hypothesis, verification, reason=reason),
+                None,
+            )
+
+        if verification.confidence < self.cfg.min_confidence:
+            # A confirmation the verifier itself does not stand behind is
+            # downgraded rather than reported.
+            return (
+                self._rejection(
+                    hypothesis,
+                    verification,
+                    reason=(
+                        f"confidence {verification.confidence:.2f} below "
+                        f"threshold {self.cfg.min_confidence:.2f}"
                     ),
-                    None,
+                ),
+                None,
+            )
+        finding = self._to_finding(hypothesis, verification, chains, source)
+        # Confirmed candidates are recorded alongside the rejected ones: the
+        # report has to account for every hypothesis the scanner raised, not
+        # only the ones that were dropped.
+        return self._rejection(hypothesis, verification), finding
+
+    async def _ask_verifier(
+        self,
+        hypothesis: Hypothesis,
+        packet: Dict[str, Any],
+        source: str,
+        result: Phase2Report,
+    ) -> Optional[Verification]:
+        """Ask the verifier once, and again while it refuses to decide.
+
+        A hedge cannot be scored: only CONFIRMED counts, so a model that
+        shrugs at code it has plainly read loses recall for being cautious
+        rather than for being wrong -- and models differ enormously in how
+        readily they shrug. The repeat question states the contract once more
+        over the same evidence; whatever comes back is what gets judged.
+        A transport failure on the repeat keeps the first answer instead of
+        turning a working verdict into a lost one.
+        """
+
+        async def ask(payload: Dict[str, Any]) -> Verification:
+            with thinking_log.scope(
+                id=source, file=source, role="verifier", hypothesis=hypothesis.id
+            ):
+                raw = await self.ask_json(VERIFIER_PROMPT, payload)
+            return self._parse_verification(raw)
+
+        try:
+            verification = await ask(packet)
+        except Exception as exc:  # noqa: BLE001
+            result.errors.append(
+                f"verifier[{hypothesis.id}]: {type(exc).__name__}: {exc}"
+            )
+            return None
+
+        for _ in range(max(0, self.cfg.hedge_retries)):
+            if verification.decision != "UNCERTAIN":
+                break
+            nudged = dict(packet)
+            nudged["correction"] = sanitize_value(
+                VERIFIER_NUDGE.format(
+                    previous=verification.explanation or verification.decision
                 )
-            finding = self._to_finding(hypothesis, verification, chains, source)
-            # Confirmed candidates are recorded alongside the rejected ones: the
-            # report has to account for every hypothesis the scanner raised, not
-            # only the ones that were dropped.
-            return self._rejection(hypothesis, verification), finding
+            )
+            try:
+                repeated = await ask(nudged)
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(
+                    f"verifier[{hypothesis.id}]: hedge retry: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                break
+            verification = repeated
+        return verification
+
+    def _resolve_hedge(self, verification: Verification) -> Verification:
+        """Turn a hedge the model insisted on into a verdict the report can use.
+
+        Two cases, and only two. A hedge that reports the path verified has
+        contradicted itself -- a verified source-to-sink path is what a
+        confirmation *is* -- so it is put forward as a confirmation and every
+        deterministic gate still judges it on its merits. A hedge with no
+        verified path has nothing to report: the packet failed to ground the
+        claim, which the contract has always called a rejection. A reply that
+        never carried a decision stays UNCERTAIN, because an unanswered
+        question is not evidence of safety.
+        """
+        if verification.decision != "UNCERTAIN" or not verification.usable:
+            return verification
+        if (
+            verification.chain_verified
+            and verification.confidence >= self.cfg.min_confidence
+        ):
+            note = "hedge resolved: verifier reported the source-to-sink path verified"
+            return replace(
+                verification,
+                decision="CONFIRMED",
+                explanation=(
+                    f"{verification.explanation} [{note}]"
+                    if verification.explanation
+                    else note
+                ),
+            )
+        note = (
+            "hedge resolved: no verified source-to-sink path, "
+            "so the packet does not ground the claim"
+        )
+        return replace(
+            verification,
+            decision="REJECTED",
+            explanation=(
+                f"{verification.explanation} [{note}]"
+                if verification.explanation
+                else note
+            ),
+        )
 
     def _evidence_gate(
         self,
         hypothesis: Hypothesis,
         verification: Verification,
         proven: Sequence[Dict[str, Any]],
+        *,
+        engine_silent: bool = False,
     ) -> str:
         """Deterministic checks the verifier's own verdict is held to.
 
@@ -552,6 +785,17 @@ class MultiAgentPipeline:
         is not reported as unmitigated -- are enforced here in code. Each gate
         records the reason it fired so the report shows the candidate was
         dropped for a stated cause rather than silently.
+
+        ``engine_silent`` is what keeps the first of those from being vacuous.
+        The chain gate may only overrule a confirmation when the engine had
+        paths to offer and none of them reached this sink -- that is the engine
+        disagreeing with the model, and disagreement is evidence. When the
+        engine recovered no path at all for the file it has not disagreed with
+        anything; it has said nothing, and treating silence as a refutation
+        makes the gate reject every confirmation on exactly the inputs the
+        engine cannot analyse. Measured on a function-level C benchmark that is
+        53 of 60 files, which is why it was the single largest source of lost
+        recall.
         """
         cwes = verification.cwe or ([hypothesis.cwe] if hypothesis.cwe else [])
 
@@ -565,11 +809,11 @@ class MultiAgentPipeline:
                 "(chain_verified is false)"
             )
 
-        if self.cfg.require_chain_evidence and not proven:
+        if self.cfg.require_chain_evidence and not proven and not engine_silent:
             if any(taint_modelled(cwe) for cwe in cwes):
                 return (
                     f"confirmed {', '.join(cwes)} but the taint engine found no "
-                    "source-to-sink path in this file"
+                    "source-to-sink path to this sink in this file"
                 )
         if self.cfg.reject_mitigated and any(
             c.get("mitigated") for c in proven
@@ -590,9 +834,12 @@ class MultiAgentPipeline:
             return Verification(
                 decision="UNCERTAIN",
                 explanation="Verifier returned no usable JSON object.",
+                usable=False,
             )
-        decision = str(raw.get("decision", "UNCERTAIN")).upper()
-        if decision not in DECISIONS:
+        raw_decision = raw.get("decision")
+        decision = str(raw_decision if raw_decision is not None else "").strip().upper()
+        usable = decision in DECISIONS
+        if not usable:
             decision = "UNCERTAIN"
         try:
             confidence = float(raw.get("confidence", 0.0))
@@ -605,21 +852,59 @@ class MultiAgentPipeline:
             cwe_list = [str(c) for c in cwe if c]
         else:
             cwe_list = []
+        explanation = str(raw.get("explanation") or raw.get("rationale") or "")
+        if not usable and not explanation:
+            explanation = (
+                "Verifier returned no decision field."
+                if raw_decision is None
+                else f"Verifier answered {raw_decision!r}, which is not a verdict."
+            )
         return Verification(
             decision=decision,
             confidence=max(0.0, min(1.0, confidence)),
             cwe=cwe_list,
             severity=str(raw.get("severity", "UNKNOWN")).upper(),
-            explanation=str(raw.get("explanation") or raw.get("rationale") or ""),
+            explanation=explanation,
             evidence=[str(x) for x in (raw.get("evidence") or []) if x],
             missing_evidence=[
                 str(x) for x in (raw.get("missing_evidence") or []) if x
             ],
             source_location=raw.get("source_location"),
             chain_verified=bool(raw.get("chain_verified", False)),
+            usable=usable,
         )
 
     # -- report assembly -------------------------------------------------
+    @staticmethod
+    def _resolved_cwe(
+        hypothesis: Hypothesis, verification: Verification
+    ) -> List[str]:
+        """The class the report states for a verified hypothesis.
+
+        The Verifier is asked to confirm *the hypothesis it was handed*, so a
+        confirmation may sharpen the class within its family -- "CWE-119" and
+        "CWE-122" name the same defect -- but it may not walk away to a class
+        the scanner never proposed and report that instead.
+
+        Letting it do so is not cosmetic. A hypothesis about an unchecked
+        ``memcpy`` was verified and then filed as "CWE-20", or the reverse,
+        purely because the model preferred a different label; the finding is
+        then scored as a false positive *and* the true positive disappears,
+        once for the wrong class and once for the missing one. When the two
+        classes are unrelated the hypothesis's own class is what was verified,
+        so that is what is reported, and the verifier's divergence is kept in
+        the decision's rationale where the audit trail can see it.
+        """
+        verified = [str(c).strip().upper() for c in verification.cwe if c]
+        proposed = (hypothesis.cwe or "").strip().upper()
+        if not proposed:
+            return verified
+        if not verified:
+            return [proposed]
+        if cwes_match(verified, [proposed]):
+            return verified
+        return [proposed]
+
     def _to_finding(
         self,
         hypothesis: Hypothesis,
@@ -632,7 +917,7 @@ class MultiAgentPipeline:
         The CVE and reference fields are filled from the catalogue rather than
         from the model, so a hallucinated CVE id cannot enter the report.
         """
-        primary = (verification.cwe or [hypothesis.cwe] or [""])[0].upper()
+        primary = (self._resolved_cwe(hypothesis, verification) or [""])[0].upper()
         catalogue = self.catalog.report_fields(primary)
         best = self._best_chain(chains, verification, hypothesis.line)
 
@@ -675,12 +960,22 @@ class MultiAgentPipeline:
             # The model said CONFIRMED and a gate overrode it, so what actually
             # happened to the candidate was a rejection.
             status = "REJECTED"
+        cwes = MultiAgentPipeline._resolved_cwe(hypothesis, verification)
+        verified_cwes = [str(c).strip().upper() for c in verification.cwe if c]
+        diverged = bool(hypothesis.cwe and verified_cwes) and not cwes_match(
+            verified_cwes, [hypothesis.cwe]
+        )
+        if diverged:
+            note = (
+                f"{note} [verifier proposed {', '.join(verified_cwes)} instead of "
+                f"{hypothesis.cwe}; reporting the verified claim]"
+            ).strip()
         return FinalDecision(
             group_id=hypothesis.id,
             line=hypothesis.line,
             status=status,
             confidence=verification.confidence,
-            cwe=verification.cwe or ([hypothesis.cwe] if hypothesis.cwe else []),
+            cwe=cwes,
             severity=verification.severity,
             rationale=note,
             evidence=verification.evidence,
@@ -794,12 +1089,12 @@ class MultiAgentPipeline:
     ) -> Dict[str, Any]:
         """The source around one hypothesis, read from the real path.
 
-        ``packet["file"]`` has already been through ``sanitize_value``, which
-        rewrites the leaking ``good``/``bad``/``CWE*`` path segments so the
-        agent cannot read the ground-truth label out of the filename. Reading
-        the disk with that rewritten path fails with ENOENT and leaves the
-        verifier with an empty snippet — so the unsanitised path is passed in
-        explicitly instead of being taken back out of the packet.
+        ``packet["file"]`` has already been through ``sanitize_packet``, which
+        rewrites the ``good``/``bad``/``CWE-*`` path segments so the agent cannot
+        read the ground-truth label out of the filename. Reading the disk with
+        that rewritten path fails with ENOENT and leaves the verifier with an
+        empty snippet — so the unsanitised path is passed in explicitly instead
+        of being taken back out of the packet.
         """
         context = packet.get("source_context") or {}
         if line is None or not context.get("available"):
@@ -837,30 +1132,27 @@ class MultiAgentPipeline:
     ) -> tuple:
         """The exact location required by the proposal's report schema.
 
-        ``source_location`` is model output. The schema shows it as
-        ``"file:line"``, and a model asked to be terse sometimes answers with
-        that placeholder itself ("file:183") or with a bare basename -- either
-        would put a file the report cannot stand behind into the finding. So a
-        location that names no path falls back to the file actually being
-        analysed, keeping the line when it parsed.
+        ``source_location`` is model output, and the packet it was answered from
+        has had its paths scrubbed, so the path that comes back is neither
+        trustworthy nor even the file under analysis: it names a neutralised
+        path, and a model asked to be terse answers with the schema's own
+        placeholder ("file:183") or a bare basename besides. Only the line is
+        taken from it -- the file is always the one being analysed, which is the
+        only path the report can stand behind. A dataflow chain's sink line is
+        used when the model gave no usable line.
         """
         raw = verification.source_location
-        if isinstance(raw, str) and ":" in raw:
-            file_part, _, line_text = raw.rpartition(":")
-            file_part = file_part.strip()
-            try:
-                line: Optional[int] = int(line_text)
-            except ValueError:
-                line = None
-            if "/" in file_part or "\\" in file_part:
-                return file_part, line
-            if source:
-                # A bare word is either the file under analysis or the schema's
-                # own placeholder; the path we hold is correct in both cases.
-                return source, line
-        for chain in chains:
-            if chain.get("sink_line"):
-                return chain.get("file"), int(chain["sink_line"])
-        if source:
-            return source, None
-        return None, None
+        if not isinstance(raw, str) or ":" not in raw:
+            for chain in chains:
+                if chain.get("sink_line"):
+                    return (source or None), int(chain["sink_line"])
+            return (source or None), None
+
+        # A location was offered but its line may be anything; the line is kept
+        # only when it parsed. The file is never taken from it.
+        _, _, line_text = raw.rpartition(":")
+        try:
+            line: Optional[int] = int(line_text)
+        except ValueError:
+            line = None
+        return (source or None), line
