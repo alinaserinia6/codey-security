@@ -39,7 +39,12 @@ from .models import (
     ReportFinding,
     Verification,
 )
-from .prompts import SCANNER_PROMPT, VERIFIER_NUDGE, VERIFIER_PROMPT
+from .prompts import (
+    SCANNER_PROMPT,
+    VERIFIER_CONTRADICTION_NUDGE,
+    VERIFIER_NUDGE,
+    VERIFIER_PROMPT,
+)
 from .sanitize import sanitize_packet, sanitize_value
 
 JsonClient = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
@@ -82,19 +87,24 @@ class MultiAgentConfig:
     # let those through as ordinary hypotheses.
     drop_tool_echoes: bool = True
 
-    # The Verifier is asked to confirm the hypothesis it was handed, so the class
-    # the report carries is the one that was proposed; the verifier may sharpen
-    # it inside its family but may not rename the defect to an unrelated one.
-    # Turn this off to let the verifier's own class always win, which is what
-    # it did before and what makes a confirmed hypothesis able to be filed
-    # under a class the Scanner never proposed.
-    report_verified_class: bool = True
+    # The Verifier is asked to name the class the code supports, and that is
+    # the class the report carries. The Scanner's class is one guess at the
+    # same question and may be empty, so it is a fallback for when the Verifier
+    # named nothing rather than a limit on what the Verifier may say. Turn this
+    # off to restore the earlier rule, in which a Verifier that disagreed with
+    # the Scanner about the class could not change it.
+    verifier_owns_class: bool = True
 
-    # The report names the file under analysis rather than the path the verifier
-    # echoed back. Turn this on to take the model's ``source_location`` at face
-    # value; the packet it was answered from has had its paths scrubbed, so what
-    # comes back is a neutralised path and not the file.
-    model_owns_location: bool = False
+    # A CONFIRMED verdict that still lists what it would need in order to be
+    # sure has contradicted itself: it says the packet establishes the claim and
+    # that it does not. Read as a rejection rather than reported, on the same
+    # grounds as a CONFIRMED verdict with ``chain_verified: false``. The
+    # Verifier prompt requires ``missing_evidence`` to be empty on a
+    # confirmation, so this only fires when the model filled it in anyway --
+    # measured on a function-level C benchmark, every confirmation in a run did
+    # exactly that, several of them listing "no dataflow chain recovered" and
+    # "exploitability is unproven" beside a CONFIRMED verdict.
+    reject_ungrounded_confirmation: bool = True
 
     # A chain whose mitigation the engine recognised is evidence the finding is
     # already handled. The verifier is told about it and can still confirm for
@@ -124,6 +134,16 @@ class MultiAgentConfig:
     # shrug over code it has plainly read, and an uncounted shrug is scored
     # as a miss. 0 keeps a single question per hypothesis.
     hedge_retries: int = 1
+
+    # How often a self-contradicting verdict is asked again before the
+    # contradiction is enforced. A CONFIRMED answer that still lists what it
+    # would need in order to be sure is malformed rather than wrong, and a
+    # model that has simply filled in a field it was asked about twice is
+    # better answered once more than dropped: the repeat is the difference
+    # between a leg that scores nothing and a leg that scores its findings.
+    # Whatever comes back second is what gets judged, and if it contradicts
+    # itself again ``reject_ungrounded_confirmation`` drops the candidate.
+    contradiction_retries: int = 1
 
 
 class MultiAgentPipeline:
@@ -406,14 +426,34 @@ class MultiAgentPipeline:
         self,
         verified: List[Tuple[FinalDecision, Optional[ReportFinding]]],
     ) -> Tuple[List[Tuple[FinalDecision, Optional[ReportFinding]]], List[Dict[str, Any]]]:
-        """Fold confirmed findings that describe the same claim.
+        """Fold confirmed findings that describe the same place.
 
-        Confirmed findings whose CWE families overlap say the same thing to a
-        reader -- and to the matcher: one report that confirms CWE-125 at six
-        lines of a single file states one claim six times. The most confident
-        entry survives; it carries every CWE the folded entries claimed, and
-        the absorbed entries are recorded in ``metadata["claim_merges"]`` so
-        the report still accounts for every verdict it reached.
+        Two things make two confirmed findings one report entry.
+
+        They can name overlapping CWE families -- "CWE-125" and "CWE-787" say
+        the same thing to a reader, and one report that confirms an
+        out-of-bounds access at six lines of a single file states one claim six
+        times.
+
+        They can also sit on the same lines. The family test misses that case,
+        because two claims about one statement are frequently filed under
+        unrelated classes: a file whose real defect is an unchecked allocation
+        result gets reported as a NULL dereference at the `memset` and as an
+        out-of-bounds write at the same line, and the matcher charges both --
+        once as a false positive each, and the label neither of them matched
+        becomes a false negative on top. One statement has one defect, so one
+        report entry covers it however many classes were proposed for it. The
+        folded classes are all carried on the entry that survives, so nothing
+        the Verifier said is lost.
+
+        The most confident entry survives. Confidence is a weak signal here --
+        on a function-level C benchmark it barely separated a correct class
+        from a wrong one -- but among findings that all point at the same lines
+        it is the only ranking available, and the alternative of keeping them
+        all is a guaranteed double count.
+
+        Every absorbed entry is recorded in ``metadata["claim_merges"]`` so the
+        report still accounts for every verdict it reached.
         """
         slots = [
             index
@@ -431,11 +471,19 @@ class MultiAgentPipeline:
                 x = parent[x]
             return x
 
+        def same_place(i: int, j: int) -> bool:
+            left, right = verified[slots[i]][0], verified[slots[j]][0]
+            if cwes_match(left.cwe, right.cwe):
+                return True
+            # Lines within claim_site_radius are the same statement. An entry
+            # with no line cannot be placed, so it never merges on position.
+            if left.line is None or right.line is None:
+                return False
+            return abs(left.line - right.line) <= self.cfg.claim_site_radius
+
         for i in range(len(slots)):
             for j in range(i + 1, len(slots)):
-                if cwes_match(
-                    verified[slots[i]][0].cwe, verified[slots[j]][0].cwe
-                ):
+                if same_place(i, j):
                     parent[find(i)] = find(j)
 
         groups: Dict[int, List[int]] = {}
@@ -681,15 +729,26 @@ class MultiAgentPipeline:
         source: str,
         result: Phase2Report,
     ) -> Optional[Verification]:
-        """Ask the verifier once, and again while it refuses to decide.
+        """Ask the verifier once, again while it hedges, and again while it
+        contradicts itself.
 
         A hedge cannot be scored: only CONFIRMED counts, so a model that
         shrugs at code it has plainly read loses recall for being cautious
         rather than for being wrong -- and models differ enormously in how
         readily they shrug. The repeat question states the contract once more
         over the same evidence; whatever comes back is what gets judged.
-        A transport failure on the repeat keeps the first answer instead of
-        turning a working verdict into a lost one.
+
+        A self-contradiction is the same kind of problem with the opposite
+        cause. A verdict that confirms and then lists what it would need in
+        order to be sure has not made a judgement the pipeline can score, and
+        dropping it on sight is how a model that fills in an optional field
+        loses every finding it got right. It is asked again with the two halves
+        of the contradiction quoted back, which is the one prompt in the system
+        that can name it, and the second answer is what is judged -- whether
+        that is a rejection, or a confirmation that has left the field empty.
+
+        A transport failure on either repeat keeps the answer already in hand
+        instead of turning a working verdict into a lost one.
         """
 
         async def ask(payload: Dict[str, Any]) -> Verification:
@@ -725,7 +784,40 @@ class MultiAgentPipeline:
                 )
                 break
             verification = repeated
+
+        for attempt in range(max(0, self.cfg.contradiction_retries)):
+            contradiction = self._contradiction(verification)
+            if not contradiction:
+                break
+            corrected = dict(packet)
+            corrected["correction"] = sanitize_value(
+                VERIFIER_CONTRADICTION_NUDGE.format(
+                    decision=verification.decision,
+                    listed="; ".join(contradiction),
+                )
+            )
+            try:
+                repeated = await ask(corrected)
+            except Exception as exc:  # noqa: BLE001
+                result.errors.append(
+                    f"verifier[{hypothesis.id}]: contradiction retry "
+                    f"{attempt + 1}: {type(exc).__name__}: {exc}"
+                )
+                break
+            verification = repeated
         return verification
+
+    def _contradiction(self, verification: Verification) -> List[str]:
+        """What in this verdict disagrees with itself, if anything.
+
+        Only a CONFIRMED verdict can contradict itself here: REJECTED and
+        UNCERTAIN are supposed to list what is missing, and a confirmation is
+        supposed to have nothing missing. A model that keeps the habit after
+        being asked again is what ``reject_ungrounded_confirmation`` drops.
+        """
+        if verification.decision != "CONFIRMED":
+            return []
+        return list(verification.missing_evidence)
 
     def _resolve_hedge(self, verification: Verification) -> Verification:
         """Turn a hedge the model insisted on into a verdict the report can use.
@@ -779,16 +871,21 @@ class MultiAgentPipeline:
     ) -> str:
         """Deterministic checks the verifier's own verdict is held to.
 
-        A prompt instruction is only a request, so the two conditions the
-        proposal makes load bearing -- that a reported injection really has a
+        A prompt instruction is only a request, so the conditions the proposal
+        makes load bearing -- that a reported injection really has a
         source-to-sink path, and that a path the engine showed to be mitigated
         is not reported as unmitigated -- are enforced here in code. Each gate
         records the reason it fired so the report shows the candidate was
         dropped for a stated cause rather than silently.
 
-        ``engine_silent`` is what keeps the first of those from being vacuous.
-        The chain gate may only overrule a confirmation when the engine had
-        paths to offer and none of them reached this sink -- that is the engine
+        Three of the gates are about the verifier contradicting itself.
+        ``chain_verified`` and ``missing_evidence`` are both read by this
+        function, so a verdict that sets them inconsistently with its decision
+        is a malformed verdict rather than a well-supported finding.
+
+        ``engine_silent`` is what keeps the chain gate from being vacuous.
+        The gate may only overrule a confirmation when the engine had paths to
+        offer and none of them reached this sink -- that is the engine
         disagreeing with the model, and disagreement is evidence. When the
         engine recovered no path at all for the file it has not disagreed with
         anything; it has said nothing, and treating silence as a refutation
@@ -796,6 +893,14 @@ class MultiAgentPipeline:
         engine cannot analyse. Measured on a function-level C benchmark that is
         53 of 60 files, which is why it was the single largest source of lost
         recall.
+
+        That stand-down is also why ``chain_verified`` is caught the other way
+        round. Silence cannot be read as a refuted path, so a confirmation that
+        sets ``chain_verified`` true on a file the tracker said nothing about
+        is not provably wrong -- but the model volunteering "no recovered chain
+        reaches this sink" in ``missing_evidence`` while confirming *is*
+        evidence, and it is the model's own statement rather than an inference,
+        so it needs no engine to corroborate it.
         """
         cwes = verification.cwe or ([hypothesis.cwe] if hypothesis.cwe else [])
 
@@ -807,6 +912,13 @@ class MultiAgentPipeline:
             return (
                 "verifier did not confirm the source-to-sink chain "
                 "(chain_verified is false)"
+            )
+
+        if self.cfg.reject_ungrounded_confirmation and verification.missing_evidence:
+            listed = "; ".join(verification.missing_evidence[:3])
+            return (
+                "confirmed while listing what it would need in order to be sure "
+                f"({listed})"
             )
 
         if self.cfg.require_chain_evidence and not proven and not engine_silent:
@@ -875,35 +987,43 @@ class MultiAgentPipeline:
         )
 
     # -- report assembly -------------------------------------------------
-    @staticmethod
     def _resolved_cwe(
-        hypothesis: Hypothesis, verification: Verification
+        self, hypothesis: Hypothesis, verification: Verification
     ) -> List[str]:
         """The class the report states for a verified hypothesis.
 
-        The Verifier is asked to confirm *the hypothesis it was handed*, so a
-        confirmation may sharpen the class within its family -- "CWE-119" and
-        "CWE-122" name the same defect -- but it may not walk away to a class
-        the scanner never proposed and report that instead.
+        The Verifier reads the line and names the class the code supports, so
+        that is the class the report carries. The Scanner's class is a guess
+        made while optimising for recall, and it may be empty by design.
 
-        Letting it do so is not cosmetic. A hypothesis about an unchecked
-        ``memcpy`` was verified and then filed as "CWE-20", or the reverse,
-        purely because the model preferred a different label; the finding is
-        then scored as a false positive *and* the true positive disappears,
-        once for the wrong class and once for the missing one. When the two
-        classes are unrelated the hypothesis's own class is what was verified,
-        so that is what is reported, and the verifier's divergence is kept in
-        the decision's rationale where the audit trail can see it.
+        The earlier rule ran the other way round: the Verifier was told to
+        "report the class the hypothesis names unless the evidence sharpens it
+        inside the same family", so a Verifier that read the code and concluded
+        the class was wrong had no way to say so. Measured on a function-level C
+        benchmark the two agents agreed on the class for every confirmation in
+        the run -- 66 of 66 -- which is what an instruction not to disagree
+        looks like from the outside. Since the matcher scores a finding on
+        whether its class shares a family with the label, and charges a wrong
+        class twice (the finding is a false positive and the label it should
+        have matched becomes a false negative), the class is worth taking from
+        the agent that read the code.
+
+        A Verifier that names no class at all leaves the Scanner's as the only
+        label available, so it is kept rather than dropped.
         """
         verified = [str(c).strip().upper() for c in verification.cwe if c]
         proposed = (hypothesis.cwe or "").strip().upper()
-        if not proposed:
+        if not self.cfg.verifier_owns_class:
+            if proposed:
+                return [proposed] if not verified or cwes_match(
+                    verified, [proposed]
+                ) else verified
             return verified
-        if not verified:
+        if verified:
+            return verified
+        if proposed:
             return [proposed]
-        if cwes_match(verified, [proposed]):
-            return verified
-        return [proposed]
+        return []
 
     def _to_finding(
         self,
@@ -942,8 +1062,8 @@ class MultiAgentPipeline:
             detected_by=["scanner", "verifier"],
         )
 
-    @staticmethod
     def _rejection(
+        self,
         hypothesis: Hypothesis,
         verification: Verification,
         *,
@@ -960,15 +1080,20 @@ class MultiAgentPipeline:
             # The model said CONFIRMED and a gate overrode it, so what actually
             # happened to the candidate was a rejection.
             status = "REJECTED"
-        cwes = MultiAgentPipeline._resolved_cwe(hypothesis, verification)
+        cwes = self._resolved_cwe(hypothesis, verification)
         verified_cwes = [str(c).strip().upper() for c in verification.cwe if c]
         diverged = bool(hypothesis.cwe and verified_cwes) and not cwes_match(
             verified_cwes, [hypothesis.cwe]
         )
         if diverged:
+            owner = (
+                "reporting the verified class"
+                if self.cfg.verifier_owns_class
+                else "reporting the proposed class"
+            )
             note = (
-                f"{note} [verifier proposed {', '.join(verified_cwes)} instead of "
-                f"{hypothesis.cwe}; reporting the verified claim]"
+                f"{note} [scanner proposed {hypothesis.cwe}, verifier read "
+                f"{', '.join(verified_cwes)}; {owner}]"
             ).strip()
         return FinalDecision(
             group_id=hypothesis.id,

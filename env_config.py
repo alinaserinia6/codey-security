@@ -130,7 +130,13 @@ class Config:
     phase2_reject_mitigated: bool = False
     phase2_drop_tool_echoes: bool = True
     phase2_min_confidence: float = 0.5
-    # Claim handling: one report entry per claim, one entry per family.
+    # Class ownership: the Verifier reads the line, so its class is the one the
+    # report carries and the Scanner's is a fallback.
+    phase2_verifier_owns_class: bool = True
+    # A CONFIRMED verdict that still lists missing evidence contradicts itself.
+    phase2_reject_ungrounded_confirmation: bool = True
+    phase2_contradiction_retries: int = 1
+    # Claim handling: one report entry per claim, one entry per site.
     phase2_merge_claims: bool = True
     phase2_merge_findings: bool = True
     phase2_claim_site_radius: int = 5
@@ -201,6 +207,13 @@ def get_config() -> Config:
         phase2_reject_mitigated=_env_bool("PHASE2_REJECT_MITIGATED", False),
         phase2_drop_tool_echoes=_env_bool("PHASE2_DROP_TOOL_ECHOES", True),
         phase2_min_confidence=_env_float("PHASE2_MIN_CONFIDENCE", 0.5),
+        phase2_verifier_owns_class=_env_bool("PHASE2_VERIFIER_OWNS_CLASS", True),
+        phase2_reject_ungrounded_confirmation=_env_bool(
+            "PHASE2_REJECT_UNGROUNDED_CONFIRMATION", True
+        ),
+        phase2_contradiction_retries=max(
+            0, _env_int("PHASE2_CONTRADICTION_RETRIES", 1)
+        ),
         phase2_merge_claims=_env_bool("PHASE2_MERGE_CLAIMS", True),
         phase2_merge_findings=_env_bool("PHASE2_MERGE_FINDINGS", True),
         phase2_claim_site_radius=max(0, _env_int("PHASE2_CLAIM_SITE_RADIUS", 5)),

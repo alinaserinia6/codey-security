@@ -599,10 +599,11 @@ def test_location_falls_back_to_the_chain(tmp_path):
 
 # -- the evidence gate ---------------------------------------------------
 #
-# A prompt instruction is only a request. These tests pin the two conditions the
+# A prompt instruction is only a request. These tests pin the conditions the
 # proposal makes load bearing, which are therefore enforced in code: a reported
-# injection has to have a real source-to-sink path behind it, and a path the
-# engine showed to be mitigated is not reported as unmitigated.
+# injection has to have a real source-to-sink path behind it, a path the engine
+# showed to be mitigated is not reported as unmitigated, and a verdict is not
+# read as a decision when it contradicts itself.
 
 NO_CHAIN = '''
 import subprocess
@@ -614,6 +615,23 @@ def notify():
 STRUCTURAL_ONLY = '''
 def overflow(a, b):
     return a * b
+'''
+
+#: Two defect sites far enough apart to be two findings, so that the merge
+#: tests can separate "one statement" from "one file".
+TWO_SINKS = '''
+import subprocess
+import os
+
+def first(user_input):
+    subprocess.call(user_input, shell=True)
+
+def second(name):
+    with open(name) as handle:
+        return handle.read()
+
+def third(command):
+    os.system(command)
 '''
 
 
@@ -780,6 +798,275 @@ def test_mitigated_path_is_reported_by_default(tmp_path):
     path = write(tmp_path, MITIGATED)
     agent = StubAgent(confirm({"cwe": "CWE-78", "line": 4, "claim": "x"}), [yes()])
     assert len(run(agent, phase1_report(path))["findings"]) == 1
+
+
+# -- a verdict that contradicts itself -----------------------------------
+#
+# The verifier contract asks for "missing_evidence": [] on a CONFIRMED answer,
+# and the recorded run filled that field on 66 of 66 confirmations -- the
+# prompt invited it ("hold at most three bare items each"). An invitation the
+# model took makes the field useless as evidence, so the pipeline reads the
+# contradiction a different way: it asks again, naming the contradiction, and
+# judges the second answer. Only a verdict that contradicts itself twice is
+# dropped.
+
+
+def hedged_confirmation():
+    """A confirmation that also says what it would need in order to be sure."""
+    return {
+        "decision": "CONFIRMED",
+        "confidence": 0.95,
+        "cwe": ["CWE-78"],
+        "chain_verified": True,
+        "explanation": "the shell call is reached from argv",
+        "missing_evidence": ["no recovered chain reaches this sink"],
+    }
+
+
+def test_confirmation_that_lists_missing_evidence_is_asked_again(tmp_path):
+    """A model that filled the field in out of habit gets to answer again.
+
+    Dropping the first answer costs the finding outright, and on the recorded
+    run that would have cost every finding in the run. The repeat is the
+    difference between a leg that scores nothing and a leg that scores what it
+    found.
+    """
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [hedged_confirmation(), yes()],
+    )
+    result = run(agent, phase1_report(path))
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 2
+    assert len(result["findings"]) == 1
+
+
+def test_the_contradiction_question_names_the_contradiction(tmp_path):
+    """The repeat is the one prompt that can quote the two halves at the model."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [hedged_confirmation(), yes()],
+    )
+    run(agent, phase1_report(path))
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    correction = verifier_calls[1]["correction"]
+    assert "CONFIRMED" in correction
+    assert "no recovered chain reaches this sink" in correction
+    assert '"missing_evidence": []' in correction
+
+
+def test_a_repeated_contradiction_is_dropped(tmp_path):
+    """Asked twice and still confirming what is missing, the finding goes."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [hedged_confirmation(), hedged_confirmation()],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["findings"] == []
+    assert result["metadata"]["reported_findings"] == 0
+    assert "in order to be sure" in result["decisions"][0]["rationale"]
+
+
+def test_contradiction_retries_zero_asks_once_and_drops_it(tmp_path):
+    """The ablation switch: without the repeat, the gate is immediate."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}), [hedged_confirmation()]
+    )
+    result = run(agent, phase1_report(path), contradiction_retries=0)
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 1
+    assert result["findings"] == []
+
+
+def test_the_second_answer_is_the_one_that_is_judged(tmp_path):
+    """A repeat that turns into a rejection is a real answer, and is used."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [
+            hedged_confirmation(),
+            {
+                "decision": "REJECTED",
+                "confidence": 0.9,
+                "cwe": ["CWE-78"],
+                "chain_verified": False,
+                "explanation": "no source-to-sink path in this file",
+                "missing_evidence": ["attacker-reachable source"],
+            },
+        ],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["findings"] == []
+    assert result["decisions"][0]["status"] == "REJECTED"
+
+
+def test_a_rejection_may_list_missing_evidence(tmp_path):
+    """Listing what is missing is what a rejection is for, not a contradiction."""
+    path = write(tmp_path, NO_CHAIN)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 4, "claim": "x"}),
+        [
+            {
+                "decision": "REJECTED",
+                "confidence": 0.9,
+                "chain_verified": False,
+                "explanation": "constant argument",
+                "missing_evidence": ["a source the caller controls"],
+            }
+        ],
+    )
+    result = run(agent, phase1_report(path))
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 1
+    assert result["findings"] == []
+
+
+def test_a_contradiction_retry_failure_keeps_the_answer_in_hand(tmp_path):
+    """A transport failure on the repeat must not turn a verdict into a loss."""
+
+    class FlakyAgent(StubAgent):
+        def __init__(self, *args):
+            super().__init__(*args)
+            self.seen = 0
+
+        async def __call__(self, system, packet):
+            if packet.get("role") == "verifier" and "correction" in packet:
+                raise ConnectionError("provider went away")
+            return await super().__call__(system, packet)
+
+    path = write(tmp_path, VULNERABLE)
+    agent = FlakyAgent(confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+                       [hedged_confirmation()])
+    result = run(agent, phase1_report(path))
+
+    # The contradictory answer survives, and the gate then judges it.
+    assert result["findings"] == []
+    assert "in order to be sure" in result["decisions"][0]["rationale"]
+    assert any("contradiction retry" in e for e in result["errors"])
+
+
+def test_ungrounded_confirmation_gate_can_be_ablated(tmp_path):
+    """The ablation switch for the missing-evidence gate itself."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}), [hedged_confirmation()]
+    )
+    result = run(
+        agent,
+        phase1_report(path),
+        reject_ungrounded_confirmation=False,
+        contradiction_retries=0,
+    )
+
+    assert len(result["findings"]) == 1
+
+
+# -- who owns the class --------------------------------------------------
+#
+# The scanner is tuned for recall and the verifier reads the line, so the class
+# the report carries is the verifier's. The recorded run had the two agents
+# agree on the class for 66 of 66 confirmations, which is what an instruction
+# not to disagree looks like from the outside; and because a wrong class costs
+# twice -- the finding scores as a false positive and the label it should have
+# matched stays a false negative -- this is where a class is won or lost.
+
+
+def test_the_verifier_class_is_the_one_reported(tmp_path):
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [{**yes(), "cwe": ["CWE-94"]}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["findings"][0]["cwe"] == "CWE-94"
+    assert result["decisions"][0]["cwe"] == ["CWE-94"]
+
+
+def test_verifier_class_ownership_can_be_ablated(tmp_path):
+    """The old rule survives as a switch, for replaying recorded verdicts."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [{**yes(), "cwe": ["CWE-94"]}],
+    )
+    result = run(agent, phase1_report(path), verifier_owns_class=False)
+
+    assert result["findings"][0]["cwe"] == "CWE-78"
+
+
+def test_a_verifier_without_a_class_leaves_the_scanner_cwe(tmp_path):
+    """No class from the agent that read the code means the only one is used."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}), [yes()])
+    result = run(agent, phase1_report(path))
+
+    assert result["findings"][0]["cwe"] == "CWE-78"
+
+
+def test_a_class_the_verifier_narrows_is_still_taken(tmp_path):
+    """Sharpening inside the family is a judgement, not a disagreement."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-125", "line": 6, "claim": "x"}),
+        [{**yes(), "cwe": ["CWE-787"]}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["findings"][0]["cwe"] == "CWE-787"
+
+
+def test_class_divergence_is_recorded_in_the_rationale(tmp_path):
+    """The report has to show that the class changed hands, and whose it was."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [{**yes(), "cwe": ["CWE-476"]}],
+    )
+    result = run(agent, phase1_report(path))
+
+    rationale = result["decisions"][0]["rationale"]
+    assert "scanner proposed CWE-78" in rationale
+    assert "verifier read CWE-476" in rationale
+    assert "reporting the verified class" in rationale
+
+
+def test_class_divergence_reads_differently_when_ablated(tmp_path):
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [{**yes(), "cwe": ["CWE-476"]}],
+    )
+    result = run(agent, phase1_report(path), verifier_owns_class=False)
+
+    assert "reporting the proposed class" in result["decisions"][0]["rationale"]
+
+
+def test_a_narrowing_inside_one_family_is_not_reported_as_divergence(tmp_path):
+    """CWE-94 and CWE-78 share the injection family, so nothing changed hands.
+
+    The note is for a real disagreement. Writing it for every refinement would
+    bury the cases where the verifier overrode the scanner outright.
+    """
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-78", "line": 6, "claim": "x"}),
+        [{**yes(), "cwe": ["CWE-94"]}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert "scanner proposed" not in result["decisions"][0]["rationale"]
+    assert result["findings"][0]["cwe"] == "CWE-94"
 
 
 # -- evidence the verifier is actually shown -----------------------------
@@ -979,10 +1266,197 @@ def test_merge_is_off_when_configured_off(tmp_path):
     )
     result = run(agent, phase1_report(path), merge_claims=False, merge_findings=False)
 
-    verifier_calls = [p for s, p in agent.prompts if p.get("role") == "verifier"]
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
     assert len(verifier_calls) == 2
     assert len(result["findings"]) == 2
     assert "claim_merges" not in result["metadata"]
+
+
+# -- one statement is one report entry -----------------------------------
+#
+# The family test above misses the case the matcher charges most expensively:
+# two classes about the same line. An unchecked allocation result gets reported
+# as a NULL dereference at the memset and as an out-of-bounds write at the same
+# line, and the matcher scores both -- once as a false positive each -- while
+# the label neither of them matched stays a false negative. Replaying the
+# recorded verdicts through this one change moved C from 0.154 to 0.200 and D
+# from 0.083 to 0.111 with recall unchanged.
+
+
+def test_unrelated_classes_on_one_line_merge(tmp_path):
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-476", "line": 6, "claim": "unchecked result"},
+                {"cwe": "CWE-787", "line": 6, "claim": "write past the buffer"},
+            ]
+        },
+        [{**yes(), "confidence": 0.9}, {**yes(), "confidence": 0.95}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 1
+    assert result["decisions"][0]["cwe"] == ["CWE-787", "CWE-476"]
+    assert result["findings"][0]["line"] == 6
+    merges = result["metadata"]["claim_merges"]
+    assert [m["group_id"] for m in merges] == ["H1"]
+    assert merges[0]["merged_into"] == "H2"
+
+
+def test_the_merged_entry_keeps_the_most_confident_class_first(tmp_path):
+    """The class that survives the fold is the one the verifier stood behind."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-476", "line": 6, "claim": "a"},
+                {"cwe": "CWE-787", "line": 6, "claim": "b"},
+            ]
+        },
+        [{**yes(), "confidence": 0.8}, {**yes(), "confidence": 0.99}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["decisions"][0]["cwe"][0] == "CWE-787"
+    assert result["decisions"][0]["confidence"] == 0.99
+
+
+def test_unrelated_classes_far_apart_stay_separate(tmp_path):
+    """Proximity is the test, and radius is the test's width."""
+    path = write(tmp_path, TWO_SINKS)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-78", "line": 6, "claim": "argv into a shell"},
+                {"cwe": "CWE-190", "line": 13, "claim": "an arithmetic overflow"},
+            ]
+        },
+        [{**yes(), "confidence": 0.9}, {**yes(), "confidence": 0.9}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 2
+    assert "claim_merges" not in result["metadata"]
+
+
+def test_classes_within_the_radius_keep_the_primary_line(tmp_path):
+    """A group whose members are all near the primary keeps a line to report."""
+    path = write(tmp_path, TWO_SINKS)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-78", "line": 6, "claim": "argv into a shell"},
+                {"cwe": "CWE-190", "line": 10, "claim": "an arithmetic overflow"},
+            ]
+        },
+        [{**yes(), "confidence": 0.9}, {**yes(), "confidence": 0.9}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 1
+    assert result["decisions"][0]["line"] == 6
+    assert result["findings"][0]["line"] == 6
+
+
+def test_one_family_spanning_the_file_is_left_unplaced(tmp_path):
+    """Folded across a spread too wide to name, so no line is claimed.
+
+    Two overflow classes at the ends of a file are one report entry, and the
+    entry covers both ends -- there is no line a reader could take that as the
+    site of the defect.
+    """
+    path = write(tmp_path, TWO_SINKS)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-125", "line": 6, "claim": "over-read"},
+                {"cwe": "CWE-787", "line": 13, "claim": "over-write"},
+            ]
+        },
+        [{**yes(), "confidence": 0.9}, {**yes(), "confidence": 0.9}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 1
+    assert result["decisions"][0]["line"] is None
+    assert result["findings"][0]["line"] is None
+
+
+def test_a_claim_site_radius_of_zero_merges_only_exact_lines(tmp_path):
+    path = write(tmp_path, TWO_SINKS)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-78", "line": 6, "claim": "argv into a shell"},
+                {"cwe": "CWE-190", "line": 13, "claim": "an arithmetic overflow"},
+            ]
+        },
+        [{**yes(), "confidence": 0.9}, {**yes(), "confidence": 0.9}],
+    )
+    result = run(agent, phase1_report(path), claim_site_radius=0)
+
+    assert len(result["findings"]) == 2
+
+
+def test_findings_without_a_line_do_not_merge_on_position(tmp_path):
+    """Nothing to place means nothing to merge on."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-476", "claim": "a"},
+                {"cwe": "CWE-787", "claim": "b"},
+            ]
+        },
+        [yes(), yes()],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 2
+
+
+def test_a_merge_never_drops_a_class_it_did_not_fold(tmp_path):
+    """Recall is bought with the union, so the union has to be complete."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-476", "line": 6, "claim": "a"},
+                {"cwe": "CWE-787", "line": 6, "claim": "b"},
+                {"cwe": "CWE-125", "line": 6, "claim": "c"},
+            ]
+        },
+        [yes(), yes(), yes()],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 1
+    assert set(result["decisions"][0]["cwe"]) == {
+        "CWE-125",
+        "CWE-476",
+        "CWE-787",
+    }
+
+
+def test_a_rejected_candidate_is_not_merged_away(tmp_path):
+    """Only confirmations are folded; a rejection stays on the record."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent(
+        {
+            "hypotheses": [
+                {"cwe": "CWE-476", "line": 6, "claim": "a"},
+                {"cwe": "CWE-787", "line": 6, "claim": "b"},
+            ]
+        },
+        [yes(), {"decision": "REJECTED", "confidence": 0.9, "explanation": "no"}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert len(result["findings"]) == 1
+    assert "claim_merges" not in result["metadata"]
+    assert {d["status"] for d in result["decisions"]} == {"CONFIRMED", "REJECTED"}
+
 
 
 def test_scanner_failure_falls_back_to_tool_findings(tmp_path):

@@ -69,14 +69,20 @@ class ConfusionMatrix:
 
 @dataclass
 class Metrics:
-    """Finding-level metrics.
+    """Finding-level precision/recall/F1 plus sample-level benign-side rates.
 
     ``precision``/``recall``/``f1`` are computed over *findings*: a true positive
-    is a prediction matched to a ground truth. ``false_positive_rate`` is
-    finding-level too, so its ``negative_support`` counts both benign-file
-    findings and unmatched vulnerable-file findings and must not be read as a
-    benign-file false-alarm rate. Use ``metadata.sample_level.benign_flag_rate``
-    for the latter.
+    is a prediction matched to a ground truth, and ``confusion`` holds those
+    three counts -- except ``confusion.tn``, which is the number of benign
+    files nothing was reported on, because a file is the unit that can be
+    clean.
+
+    The benign-side rates (``false_positive_rate``, ``specificity``,
+    ``accuracy``, ``balanced_accuracy``) are counts of *files* and come from
+    ``sample_confusion``, never from ``confusion``. ``negative_support`` is the
+    number of benign files and is therefore the same for every leg run on the
+    same dataset, which is what makes those rates comparable between legs. See
+    :mod:`phase3.metrics`.
     """
 
     confusion: ConfusionMatrix
@@ -90,6 +96,13 @@ class Metrics:
     balanced_accuracy: float
     positive_support: int
     negative_support: int
+    #: The same run counted in files: TP = vulnerable files with a matched
+    #: finding, FP = benign files flagged, FN = vulnerable files missed,
+    #: TN = benign files left clean. Every cell is a sample, so these four
+    #: rates are comparable between legs in a way the mixed matrix is not.
+    sample_confusion: ConfusionMatrix = field(
+        default_factory=ConfusionMatrix
+    )
     matched_predictions: int = 0
     unmatched_predictions: int = 0
 

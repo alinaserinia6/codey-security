@@ -4,6 +4,7 @@ from .matcher import MatchConfig, greedy_match, _cwes_match
 from .metrics import compute_metrics
 from .models import ConfusionMatrix, EvaluationResult, GroundTruth, Metrics, Prediction
 
+
 def evaluate(experiment: str, predictions: Iterable[Prediction], ground_truth: Iterable[GroundTruth], *, match_config: MatchConfig | None = None) -> EvaluationResult:
     cfg=match_config or MatchConfig(); preds=list(predictions); gts=list(ground_truth)
     pos_gts=[g for g in gts if g.vulnerable]; neg_gts=[g for g in gts if not g.vulnerable]
@@ -19,43 +20,73 @@ def evaluate(experiment: str, predictions: Iterable[Prediction], ground_truth: I
     fp=len(unmatched_positive_predictions)+len(benign_findings)
     fn=len(unmatched_gts)
     tn=len(benign_ids-benign_pred_ids)
-    metrics=compute_metrics(ConfusionMatrix(len(matches),fp,fn,tn),matched_predictions=len(matches),unmatched_predictions=fp)
+    metrics=compute_metrics(
+        ConfusionMatrix(len(matches),fp,fn,tn),
+        sample_cm=sample_confusion(matches,pos_gts,benign_ids,benign_pred_ids),
+        matched_predictions=len(matches),
+        unmatched_predictions=fp,
+        negative_support=len(neg_gts),
+    )
     per_cwe=_per_cwe(pos_preds,gts,cfg)
     return EvaluationResult(experiment,metrics,matches,unmatched_preds,unmatched_gts,per_cwe,{
         "prediction_count":len(preds),"positive_prediction_count":len(pos_preds),"ground_truth_count":len(gts),
         "positive_ground_truth_count":len(pos_gts),"negative_ground_truth_count":len(neg_gts),
         "matching":{"line_tolerance":cfg.line_tolerance,"require_cwe_when_available":cfg.require_cwe_when_available},
-        "metric_granularity":"TP/FP/FN are finding-level; TN/negative support are sample-level.",
+        "metric_granularity":"precision/recall/F1 are finding-level; confusion.tn and every benign-side rate are sample-level.",
         "sample_level":_sample_level(pos_preds,pos_gts,neg_gts,benign_ids,benign_pred_ids,matches,unmatched_positive_predictions),
     })
+
+
+def sample_confusion(matches, pos_gts, benign_ids, benign_pred_ids) -> ConfusionMatrix:
+    """The same run counted in files, so every cell is a sample.
+
+    ``FP`` here is a benign *file* that was flagged, not a finding on it. The
+    finding-level matrix keeps the findings; this one keeps the files, which is
+    the only population in which a false-positive *rate* is defined.
+    """
+    detected={m.prediction.sample_id for m in matches}
+    tp=len({g.sample_id for g in pos_gts}&detected)
+    fn=len(pos_gts)-tp
+    flagged=len(benign_pred_ids)
+    return ConfusionMatrix(tp,flagged,fn,len(benign_ids)-flagged)
+
 
 def _sample_level(pos_preds, pos_gts, neg_gts, benign_ids, benign_pred_ids, matches, unmatched_positive_predictions) -> dict:
     """Per-file view of the same evaluation.
 
-    ``metrics.false_positive_rate`` mixes two populations: findings raised on
-    benign files and findings on vulnerable files that failed to match.  A
-    false-positive rate is only meaningful against the benign population, so
-    this block reports the two separately and is the number to quote when the
-    claim is about false positives.
+    A finding-level false-positive rate is not the same question as "how often
+    does this run cry wolf on a clean file", so that number is reported here
+    instead, in files.
+
+    ``vulnerable_flagged`` and ``class_mismatch_count`` separate the two ways a
+    vulnerable file can be missed. ``vulnerable_detected`` needs a prediction
+    whose CWE shares a family with the label, so a run that points at the right
+    line with the wrong class is counted as a false positive *and* leaves the
+    ground truth unmatched -- the finding is thrown away twice. Those files are
+    counted in ``class_mismatch_count`` so the loss is visible instead of
+    looking like a failure to look at all.
     """
     benign_flagged=len(benign_pred_ids)
     benign_total=len(neg_gts)
     matched_sample_ids={m.prediction.sample_id for m in matches}
-    # Findings raised on a *benign* file belong to the benign population;
-    # including them here would inflate the per-vulnerable-file average with
-    # the very noise benign_flag_rate is meant to describe.
     vulnerable_ids={g.sample_id for g in pos_gts}
     findings_on_vulnerable=[p for p in pos_preds if p.sample_id in vulnerable_ids]
+    flagged_vulnerable={p.sample_id for p in findings_on_vulnerable}
+    class_mismatch=len(flagged_vulnerable-matched_sample_ids)
     return {
         "vulnerable_samples":len(pos_gts),
         "vulnerable_detected":len(matched_sample_ids),
         "vulnerable_detection_rate":(len(matched_sample_ids)/len(pos_gts)) if pos_gts else 0.0,
+        "vulnerable_flagged":len(flagged_vulnerable),
+        "vulnerable_flag_rate":(len(flagged_vulnerable)/len(pos_gts)) if pos_gts else 0.0,
+        "class_mismatch_count":class_mismatch,
         "benign_samples":benign_total,
         "benign_flagged":benign_flagged,
         "benign_flag_rate":(benign_flagged/benign_total) if benign_total else 0.0,
         "unmatched_findings_on_vulnerable":len(unmatched_positive_predictions),
         "findings_per_vulnerable_file":(len(findings_on_vulnerable)/len(pos_gts)) if pos_gts else 0.0,
     }
+
 
 def _per_cwe(preds: list[Prediction], gts: list[GroundTruth], cfg: MatchConfig) -> dict[str,Metrics]:
     """Per-CWE breakdown using the same policy as the aggregate metrics.
@@ -66,8 +97,8 @@ def _per_cwe(preds: list[Prediction], gts: list[GroundTruth], cfg: MatchConfig) 
       with that CWE, so ``TN`` is meaningful (Juliet labels its ``good``
       variants with the CWE of the paired scenario);
     * a prediction is attributed to a CWE through the CWE *family* map, the
-      same way the aggregate matcher credits a parent CWE such as CWE-120 to
-      a child CWE such as CWE-122;
+      same way the aggregate matcher credits a parent CWE such as CWE-120 to a
+      child CWE such as CWE-122;
     * predictions are restricted to the files of that CWE's population, so
       warnings raised in unrelated files are not counted against it.
     """
@@ -88,5 +119,9 @@ def _per_cwe(preds: list[Prediction], gts: list[GroundTruth], cfg: MatchConfig) 
         benign_unmatched=[p for p in up if p.sample_id in benign]
         fp=len([p for p in up if p.sample_id not in benign])+len(benign_unmatched)
         tn=len(benign-predicted_benign)
-        out[cwe]=compute_metrics(ConfusionMatrix(len(m),fp,len(ug),tn),matched_predictions=len(m),unmatched_predictions=fp)
+        out[cwe]=compute_metrics(
+            ConfusionMatrix(len(m),fp,len(ug),tn),
+            sample_cm=sample_confusion(m,pg,benign,predicted_benign),
+            negative_support=len(benign),
+        )
     return out

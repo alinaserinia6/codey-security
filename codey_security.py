@@ -70,10 +70,15 @@ def _make_phase2(config: Config):
                 reject_mitigated=config.phase2_reject_mitigated,
                 drop_tool_echoes=config.phase2_drop_tool_echoes,
                 min_confidence=config.phase2_min_confidence,
+                verifier_owns_class=config.phase2_verifier_owns_class,
+                reject_ungrounded_confirmation=(
+                    config.phase2_reject_ungrounded_confirmation
+                ),
                 merge_claims=config.phase2_merge_claims,
                 merge_findings=config.phase2_merge_findings,
                 claim_site_radius=config.phase2_claim_site_radius,
                 hedge_retries=config.phase2_hedge_retries,
+                contradiction_retries=config.phase2_contradiction_retries,
             ),
             base_url=config.llm_base_url,
             model_id=config.llm_model_id,
