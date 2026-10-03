@@ -123,6 +123,11 @@ class EvaluationResult:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        # Which samples are vulnerable is not a property of an unmatched
+        # prediction -- it is a property of the sample, and the two disagree
+        # whenever the run diagnosed the class wrongly on a file that really is
+        # vulnerable.
+        unmatched_gt_ids = {g.sample_id for g in self.unmatched_ground_truth}
         return {
             "experiment": self.experiment,
             "metrics": self.metrics.to_dict(),
@@ -135,8 +140,51 @@ class EvaluationResult:
                 }
                 for match in self.matches
             ],
-            "unmatched_predictions": [p.to_dict() for p in self.unmatched_predictions],
+            "unmatched_predictions": [
+                _annotate_unmatched(p, unmatched_gt_ids)
+                for p in self.unmatched_predictions
+            ],
             "unmatched_ground_truth": [g.to_dict() for g in self.unmatched_ground_truth],
             "per_cwe": {cwe: metrics.to_dict() for cwe, metrics in self.per_cwe.items()},
             "metadata": self.metadata,
         }
+
+
+def _annotate_unmatched(prediction: Prediction, unmatched_gt_ids: set) -> Dict[str, Any]:
+    """One unmatched finding, with the sample's label attached to it.
+
+    ``Prediction.vulnerable`` means "this run asserts the file is vulnerable".
+    It is always true, because a prediction only exists to assert something --
+    so dumped into ``unmatched_predictions`` unqualified it reads as though the
+    evaluation had labelled the sample, and a clean file appears in the
+    false-positive list looking like a bad one. It is renamed to say what it is.
+
+    The sample's own label is what answers "why did this not match", and there
+    are two different answers:
+
+    ``wrong_class_on_vulnerable_file``
+        The file really is vulnerable and the run named a class outside the
+        label's family. This is charged twice on purpose -- the finding is an
+        unmatched false positive *and* the label it should have matched stays an
+        unmatched ground truth, so it is also counted in
+        ``unmatched_ground_truth``. Reading it as a false positive on a bad file
+        understates the cost by half.
+
+    ``reported_on_benign_file``
+        The sample is labelled clean and the run flagged it. This is a false
+        positive in the ordinary sense, and no ground truth is left unmatched.
+
+    A vulnerable sample whose label went unmatched is identifiable from
+    ``unmatched_ground_truth`` alone, so no extra plumbing is needed: a finding
+    whose sample is absent from that list was reported on a benign file.
+    """
+    entry = prediction.to_dict()
+    entry["claims_vulnerable"] = entry.pop("vulnerable")
+    on_vulnerable = prediction.sample_id in unmatched_gt_ids
+    entry["sample_vulnerable"] = on_vulnerable
+    entry["failure"] = (
+        "wrong_class_on_vulnerable_file"
+        if on_vulnerable
+        else "reported_on_benign_file"
+    )
+    return entry

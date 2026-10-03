@@ -54,6 +54,38 @@ def _calls(entry: Dict[str, Any], role: str) -> List[Dict[str, Any]]:
     ]
 
 
+def _errored_calls(entry: Dict[str, Any], role: str) -> int:
+    return sum(
+        1
+        for call in (entry.get("calls") or [])
+        if call.get("role") == role and call.get("error")
+    )
+
+
+def _final_verdicts(entry: Dict[str, Any]) -> Dict[str, Verification]:
+    """The verdict the live pipeline ended up with, per hypothesis.
+
+    Last answer wins, not first. The Verifier is asked a second time when its
+    first answer contradicts itself, and it is the second answer the pipeline
+    judged -- so a harness that keeps the first is scoring an answer the run
+    threw away. On a recorded C benchmark that was 18 of the hypotheses, and it
+    is the whole difference between a replay that reproduces its run (3 false
+    positives) and one that does not (17).
+
+    Verdicts whose hypothesis cannot be identified -- which happens when the
+    scanner was retried after a failure and produced a second, differently
+    numbered reply -- are left out rather than attributed to the wrong claim.
+    """
+    verdicts: Dict[str, Verification] = {}
+    for call in _calls(entry, "verifier"):
+        tag = call.get("hypothesis")
+        if tag:
+            verdicts[tag] = MultiAgentPipeline._parse_verification(
+                call.get("answer") or {}
+            )
+    return verdicts
+
+
 def replay_file(
     pipe: MultiAgentPipeline,
     report: Dict[str, Any],
@@ -62,10 +94,11 @@ def replay_file(
     """Run one file's recorded answers through the current claim/gate logic.
 
     A verdict is tied to the hypothesis it answered by the id the thinking log
-    records for it, so the pairing is exact rather than positional. Verdicts
-    whose hypothesis cannot be identified -- which happens when the scanner was
-    retried after a failure and produced a second, differently numbered reply --
-    are left out rather than attributed to the wrong claim.
+    records for it, so the pairing is exact rather than positional. Every step
+    that changes the outcome is delegated to the pipeline's own method -- the
+    fallback predicate, the hedge resolution, the gates, the merge -- because a
+    harness that reimplements them is a harness that quietly measures a program
+    that never ran.
     """
     source = str(report.get("source") or report.get("path") or "")
     metadata: Dict[str, Any] = {"source": source}
@@ -73,19 +106,22 @@ def replay_file(
     chains = taint_chains_for(structure) if structure else []
     engine_silent = not chains
 
-    verdicts: Dict[str, Verification] = {}
-    for call in _calls(entry, "verifier"):
-        tag = call.get("hypothesis")
-        if tag and tag not in verdicts:
-            verdicts[tag] = MultiAgentPipeline._parse_verification(
-                call.get("answer") or {}
-            )
+    verdicts = _final_verdicts(entry)
+    scanner_failed = _errored_calls(entry, "scanner") > 0
+    scanner_calls = _calls(entry, "scanner")
+
+    # When every scanner call failed there is no reply to iterate, so the
+    # fallback has to be evaluated on its own -- that is the case the live run
+    # recorded as ``scanner_failed``, and skipping it loses the tool findings on
+    # exactly the files whose scanner call was the thing that broke.
+    replies = [
+        MultiAgentPipeline._parse_hypotheses(call.get("answer") or {})
+        for call in scanner_calls
+    ] or [[]]
 
     verified: List[Tuple[FinalDecision, Optional[ReportFinding]]] = []
-    for call in _calls(entry, "scanner"):
-        hypotheses = MultiAgentPipeline._parse_hypotheses(call.get("answer") or {})
-        if not hypotheses:
-            continue
+    for reply in replies:
+        hypotheses = list(reply)
         proposed = len(hypotheses)
 
         if pipe.cfg.drop_tool_echoes:
@@ -97,13 +133,19 @@ def replay_file(
                 ids = {h.id for h in echoes}
                 hypotheses = [h for h in hypotheses if h.id not in ids]
 
-        if not hypotheses and proposed:
-            # Everything the scanner proposed was a restatement of a tool
-            # finding: those are what gets verified in that case, exactly as the
-            # live pipeline falls back to them.
+        # The pipeline's own predicate, so a fallback case added there is not
+        # silently absent here.
+        reason = pipe._fallback_reason(
+            not hypotheses,
+            scanner_failed,
+            proposed,
+            report.get("findings") or [],
+        )
+        if reason:
             hypotheses = pipe._fallback_hypotheses(report)
             if hypotheses:
                 metadata["scanner_fallback"] = True
+                metadata["scanner_fallback_reason"] = reason
         hypotheses = hypotheses[: max(1, pipe.cfg.max_hypotheses)]
 
         known = {h.id for h in hypotheses}
@@ -111,10 +153,13 @@ def replay_file(
             for site in pipe._sites(claim):
                 hypothesis = site[0]
                 if hypothesis.id not in known:
-                    continue
+                    break
                 verification = verdicts.get(hypothesis.id)
                 if verification is None:
                     break  # the verifier never got to this site
+                # The pipeline resolves a hedge before it gates the answer, so a
+                # recorded UNCERTAIN has to be resolved the same way here.
+                verification = pipe._resolve_hedge(verification)
                 outcome = pipe._decide(
                     hypothesis, verification, chains, engine_silent, source
                 )

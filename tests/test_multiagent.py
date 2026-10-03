@@ -775,6 +775,226 @@ def test_chain_verified_is_required_even_with_the_gate_ablated(tmp_path):
     assert result["findings"] == []
 
 
+# -- chain_verified is enforced on every class ---------------------------
+#
+# The engine's disagreement gate is scoped to the classes the tracker models,
+# because outside them "is there a source-to-sink path" is not a question about
+# the defect. It is tempting to scope this gate the same way -- an out-of-bounds
+# read off a direct index has no taint flow and cannot truthfully assert one.
+# That exemption was implemented and measured on the recorded C benchmark, and
+# it is a bad trade: 18 findings admitted, 1 of them a true positive, precision
+# 0.400 -> 0.130 for recall 0.091 -> 0.136.
+#
+# chain_verified is the model reporting on its own reasoning, not the engine
+# contradicting it, and on this corpus "false" is usually where it puts "I could
+# not establish this" -- the rejections name the missing check more often than
+# not. Exempting the gate removed a useful negative signal and supplied no
+# correct one.
+
+
+INDEXED = """
+def remove(stl, facet_num):
+    j = ((stl->neighbors_start[facet_num].neighbor[0] == -1) +
+         (stl->neighbors_start[facet_num].neighbor[1] == -1))
+    return j
+"""
+
+
+def test_chain_verified_is_required_on_a_class_the_tracker_does_not_model(tmp_path):
+    """Not asserting a chain is itself the signal, whatever the class is."""
+    path = write(tmp_path, INDEXED, "indexed.c")
+    agent = StubAgent(
+        confirm({"cwe": "CWE-125", "line": 3, "claim": "facet_num indexes unchecked"}),
+        [{"decision": "CONFIRMED", "confidence": 0.62, "cwe": ["CWE-125"],
+          "chain_verified": False, "explanation": "index is not range checked"}],
+    )
+    result = run(agent, phase1_report(path))
+
+    assert result["findings"] == []
+    assert "chain_verified is false" in result["decisions"][0]["rationale"]
+
+
+def test_the_engine_disagreement_gate_is_still_scoped_to_modelled_classes(tmp_path):
+    """The scoping belongs to the gate that asks what the *engine* found.
+
+    ``require_chain_evidence`` overrules a confirmation when the tracker had
+    paths and none reached the sink. That question is only meaningful for a
+    class the tracker models, which is why it is scoped -- and it is scoped
+    independently of chain_verified, which stays unconditional.
+    """
+    from analyzers.taint import taint_modelled
+
+    assert not taint_modelled("CWE-125")  # an index, not a flow
+    assert taint_modelled("CWE-78")  # a flow
+
+    path = write(tmp_path, INDEXED, "indexed.c")
+    agent = StubAgent(
+        confirm({"cwe": "CWE-125", "line": 3, "claim": "unchecked index"}),
+        [{**yes(), "cwe": ["CWE-125"]}],
+    )
+    result = run(agent, phase1_report(path), require_chain_evidence=False)
+
+    # With the engine gate ablated, an asserted chain is enough.
+    assert len(result["findings"]) == 1
+    assert result["findings"][0]["cwe"] == "CWE-125"
+
+
+# -- the window the verifier reasons over --------------------------------
+#
+# A defect is a property of an operation, not of a line. A line-radius window
+# cuts the operation in half and produces confident, well-reasoned and wrong
+# answers: on a 214-line labelled file the Scanner put its hypothesis on a
+# variable declaration, the window showed 17 lines of declarations, and the
+# Verifier reported that the defect "does not appear anywhere in the snippet" --
+# true of the snippet, false of the file.
+
+LONG_FUNCTION = """
+#include <stdio.h>
+
+static int
+parse_profile(struct profile *p, const unsigned char *buf, size_t len)
+{
+  unsigned int i;
+  size_t n = 0;
+
+  if (!buf)
+    return -1;
+
+  for (i = 0; i < len; i++) {
+    if (buf[i] == '\\n')
+      n++;
+  }
+
+  if (n == 0)
+    return -1;
+
+  p->names = malloc(n * sizeof(char *));
+
+  for (i = 0; i < len; i++) {
+    if (buf[i] != '\\n')
+      continue;
+    strcpy(p->names[i], (const char *)&buf[i]);
+  }
+
+  return 0;
+}
+"""
+
+
+def test_the_verifier_window_covers_the_whole_function(tmp_path):
+    """A hypothesis mid-function must not be answered from its own neighbourhood.
+
+    The check is the bounds check: it sits several lines above the sink that
+    makes the bug, and a radius window that stops short of it cannot settle
+    whether the copy is bounded.
+    """
+    path = write(tmp_path, LONG_FUNCTION, "long.c")
+    report = phase1_report(path)
+    agent = StubAgent(
+        confirm({"cwe": "CWE-120", "line": 27, "claim": "strcpy into p->names[i]"}),
+        [{**yes(), "cwe": ["CWE-120"]}],
+    )
+    run(agent, report)
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    context = verifier_calls[0]["source_context"]
+    # The whole parse_profile body, including the allocation at line 22 and the
+    # bounds logic above it.
+    assert context["start_line"] <= 8
+    assert context["end_line"] >= 27
+    assert "p->names = malloc" in context["snippet"]
+
+
+def test_the_window_still_has_a_radius_around_a_line_outside_any_function(tmp_path):
+    """A hypothesis with no function around it keeps the old radius window."""
+    path = write(tmp_path, LONG_FUNCTION, "long.c")
+    report = phase1_report(path)
+    report["metadata"]["structure"] = {"language": "c", "functions": []}
+    agent = StubAgent(
+        confirm({"cwe": "CWE-120", "line": 27, "claim": "strcpy"}),
+        [{**yes(), "cwe": ["CWE-120"]}],
+    )
+    run(agent, report)
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    context = verifier_calls[0]["source_context"]
+    # The radius window, clamped to the end of the file -- not the function.
+    assert context["start_line"] == 27 - 8
+    assert context["end_line"] == 30
+    assert "parse_profile" not in context["snippet"]
+
+
+def test_function_bounds_are_not_added_to_the_packet(tmp_path):
+    """Leg C is the run with no structural evidence, and must stay that way.
+
+    Widening the window is code assembly; handing the Scanner and Verifier a
+    function index would be structural evidence, and would make the C/D ablation
+    measure something other than the structural evidence it is named for.
+    """
+    path = write(tmp_path, LONG_FUNCTION, "long.c")
+    agent = StubAgent(
+        confirm({"cwe": "CWE-120", "line": 27, "claim": "strcpy"}),
+        [{**yes(), "cwe": ["CWE-120"]}],
+    )
+    run(agent, report_of := phase1_report(path), include_structural=False)
+
+    for _, packet in agent.prompts:
+        assert "functions" not in packet
+        assert "structural" not in packet
+
+
+def test_structural_evidence_is_still_shown_when_asked_for(tmp_path):
+    path = write(tmp_path, LONG_FUNCTION, "long.c")
+    agent = StubAgent(
+        confirm({"cwe": "CWE-120", "line": 27, "claim": "strcpy"}),
+        [{**yes(), "cwe": ["CWE-120"]}],
+    )
+    run(agent, phase1_report(path), include_structural=True)
+
+    scanner_packets = [p for _, p in agent.prompts if p.get("role") == "scanner"]
+    assert scanner_packets[0]["structural"]["function_count"] == 1
+
+
+HUGE_FUNCTION = "\n".join(
+    ["int huge(int x)", "{"] + [f"  x += {n};" for n in range(1, 901)] + ["  return x;", "}"]
+)
+
+
+def test_a_function_larger_than_the_cap_is_capped_around_the_hypothesis(tmp_path):
+    """A snippet that overruns the budget gets cut by the transport otherwise.
+
+    It gets cut at the end of the body, which is where the sink is, so the cap
+    centres the surviving window on the line being asked about and says out loud
+    that it is not the whole function.
+    """
+    path = write(tmp_path, HUGE_FUNCTION, "huge.c")
+    agent = StubAgent(
+        confirm({"cwe": "CWE-190", "line": 450, "claim": "overflow"}),
+        [{**yes(), "cwe": ["CWE-190"]}],
+    )
+    run(agent, phase1_report(path), context_max_lines=100)
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    context = verifier_calls[0]["source_context"]
+    assert context["end_line"] - context["start_line"] + 1 <= 100
+    assert 450 >= context["start_line"] and 450 <= context["end_line"]
+    assert context["truncated"] is True
+    assert "not the whole of it" in context["note"]
+
+
+def test_the_cap_leaves_an_ordinary_function_alone(tmp_path):
+    path = write(tmp_path, LONG_FUNCTION, "long.c")
+    agent = StubAgent(
+        confirm({"cwe": "CWE-120", "line": 27, "claim": "strcpy"}),
+        [{**yes(), "cwe": ["CWE-120"]}],
+    )
+    run(agent, phase1_report(path), context_max_lines=400)
+
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    context = verifier_calls[0]["source_context"]
+    assert "truncated" not in context
+
+
 MITIGATED = '''
 import subprocess
 
@@ -1489,6 +1709,86 @@ def test_scanner_failure_falls_back_to_tool_findings(tmp_path):
     assert verifier_calls[0]["hypothesis"]["cwe"] == "CWE-78"
     assert len(result["findings"]) == 1
     assert any("scanner" in error for error in result["errors"])
+
+
+def test_a_silent_scanner_does_not_discard_the_tools_findings(tmp_path):
+    """Declining to propose is not a reason to throw away existing evidence.
+
+    This is the case that was silently losing recall. The Scanner answers
+    successfully with an empty list on a file Phase 1 flagged, so the fallback
+    condition -- which only fired on a failed call or on hypotheses dropped as
+    echoes -- did not fire, and the tool findings were dropped unread. Only
+    CONFIRMED Phase 2 decisions become predictions, so a flagged file could
+    contribute nothing at all: the leg scored worse than the static baseline it
+    is meant to extend.
+    """
+    path = write(tmp_path, VULNERABLE)
+    report = phase1_report(path)
+    report["findings"] = [
+        {"cwe": "CWE-327", "line": 3, "message": "weak hash", "rule_id": "B303"}
+    ]
+
+    agent = StubAgent({"hypotheses": []}, [yes()])
+    result = run(agent, report)
+
+    assert result["metadata"]["scanner_fallback"] is True
+    assert (
+        result["metadata"]["scanner_fallback_reason"]
+        == "scanner_declined_but_tools_flagged_the_file"
+    )
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 1
+    assert verifier_calls[0]["hypothesis"]["cwe"] == "CWE-327"
+
+
+def test_a_silent_scanner_on_a_file_the_tools_missed_stays_empty(tmp_path):
+    """No findings anywhere means nothing to fall back to, and nothing to ask."""
+    path = write(tmp_path, VULNERABLE)
+    agent = StubAgent({"hypotheses": []}, [yes()])
+    result = run(agent, phase1_report(path))
+
+    assert "scanner_fallback" not in result["metadata"]
+    assert result["findings"] == []
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) == 0
+
+
+def test_the_fallback_still_has_to_be_verified(tmp_path):
+    """A tool finding becomes a question, not an answer.
+
+    Falling back must not turn the static baseline's unfiltered findings into
+    confirmed ones: the verifier still reads the line and can reject.
+    """
+    path = write(tmp_path, VULNERABLE)
+    report = phase1_report(path)
+    report["findings"] = [
+        {"cwe": "CWE-78", "line": 6, "message": "shell=True", "rule_id": "B602"}
+    ]
+    agent = StubAgent(
+        {"hypotheses": []},
+        [{"decision": "REJECTED", "confidence": 0.9, "explanation": "no path"}],
+    )
+    result = run(agent, report)
+
+    assert result["metadata"]["scanner_fallback"] is True
+    assert result["findings"] == []
+
+
+def test_the_fallback_covers_every_tool_finding_the_scanner_declined(tmp_path):
+    path = write(tmp_path, VULNERABLE)
+    report = phase1_report(path)
+    report["findings"] = [
+        {"cwe": "CWE-327", "line": 3, "message": "a", "rule_id": "R1"},
+        {"cwe": "CWE-362", "line": 6, "message": "b", "rule_id": "R2"},
+        {"cwe": "CWE-362", "line": 8, "message": "c", "rule_id": "R3"},
+    ]
+    agent = StubAgent({"hypotheses": []}, [yes(), yes()])
+    result = run(agent, report, include_tools=True)
+
+    # Two claims (CWE-327, CWE-362) at two sites each, one question per site.
+    verifier_calls = [p for _, p in agent.prompts if p.get("role") == "verifier"]
+    assert len(verifier_calls) >= 2
+    assert result["findings"]
 
 
 

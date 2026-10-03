@@ -124,6 +124,7 @@ class Config:
     phase2_max_groups: int = 50
     phase2_concurrency: int = 4
     phase2_context_radius: int = 8
+    phase2_context_max_lines: int = 400
     phase2_include_structural: bool = True
     phase2_include_taint: bool = True
     phase2_require_chain_evidence: bool = True
@@ -201,6 +202,7 @@ def get_config() -> Config:
         phase2_max_groups=max(1, _env_int("PHASE2_MAX_GROUPS", 50)),
         phase2_concurrency=max(1, _env_int("PHASE2_CONCURRENCY", 4)),
         phase2_context_radius=max(0, _env_int("PHASE2_CONTEXT_RADIUS", 8)),
+        phase2_context_max_lines=max(1, _env_int("PHASE2_CONTEXT_MAX_LINES", 400)),
         phase2_include_structural=_env_bool("PHASE2_INCLUDE_STRUCTURAL", True),
         phase2_include_taint=_env_bool("PHASE2_INCLUDE_TAINT", True),
         phase2_require_chain_evidence=_env_bool("PHASE2_REQUIRE_CHAIN_EVIDENCE", True),

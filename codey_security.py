@@ -59,6 +59,7 @@ def _make_phase2(config: Config):
         return build_pipeline(
             config=MultiAgentConfig(
                 context_radius=config.phase2_context_radius,
+                context_max_lines=config.phase2_context_max_lines,
                 # The single-agent budget was a count of groups to review; the
                 # multi-agent equivalent is the scanner's hypothesis budget,
                 # which bounds the LLM work in the same way.

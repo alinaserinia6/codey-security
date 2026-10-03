@@ -57,6 +57,15 @@ class MultiAgentConfig:
     """Runtime configuration for the Scanner/Verifier pipeline."""
 
     context_radius: int = 8
+
+    # Ceiling on the context window once it has been widened to the enclosing
+    # function. A function can be larger than the model's whole budget, and a
+    # snippet that overruns it is cut by the transport rather than by us -- at
+    # the end of the body, which is where the sink usually is. 400 lines is
+    # roughly 4k tokens of C, which leaves room inside an 8k budget for the
+    # prompt and the evidence.
+    context_max_lines: int = 400
+
     max_hypotheses: int = 12
     max_tokens: int = 40000
     concurrency: int = 4
@@ -186,6 +195,16 @@ class MultiAgentPipeline:
         )
 
         scan_packet = self._scan_packet(source, language, report)
+        # Function line ranges are read from the Phase 1 structural index to
+        # widen the context window, and are deliberately not put in the packet:
+        # leg C is the run *without* structural evidence, so handing it a
+        # function index would change what the ablation measures.
+        structure = (report.get("metadata") or {}).get("structure") or {}
+        functions = [
+            f
+            for f in (structure.get("functions") or [])
+            if isinstance(f, dict) and f.get("start_line") and f.get("end_line")
+        ]
         scanner_failed = False
         try:
             with thinking_log.scope(id=source, file=source, role="scanner"):
@@ -206,22 +225,48 @@ class MultiAgentPipeline:
                 echoes = {h.id for h in dropped}
                 hypotheses = [h for h in hypotheses if h.id not in echoes]
 
-        if not hypotheses and (scanner_failed or proposed):
+        tool_findings = report.get("findings") or []
+        reason = self._fallback_reason(
+            not hypotheses, scanner_failed, proposed, tool_findings
+        )
+        if reason:
             # A dropped connection must not read as "this file is clean" when
             # the tools already flagged it: the tool findings are exactly what
             # the scanner was going to reason about, so they are handed to the
             # verifier instead of the sample being lost.
             #
-            # The second half of the condition matters as much as the first. A
-            # scanner that answers with an empty list after its request timed
+            # A scanner that answers with an empty list after its request timed
             # out has not judged the file, it has failed to answer, and scoring
             # that as "nothing here" turns a transport failure into a negative
             # sample. ``proposed > 0`` with an empty remainder can only happen
             # when every hypothesis was an echo, and in that case the echo list
             # itself is the right thing to verify.
+            #
+            # The third case is the one that was silently losing recall. A
+            # scanner that answers with an empty list *successfully*, on a file
+            # the tools flagged, is not failing to answer -- it is declining to
+            # propose anything of its own. Discarding the tools' findings there
+            # made the leg weaker than the static baseline it is meant to extend,
+            # because only CONFIRMED Phase 2 decisions become predictions: a tool
+            # finding the scanner did not restate became no finding at all, so a
+            # file the tools flagged could contribute nothing. On the recorded
+            # C benchmark six vulnerable files produced no decisions at all, four
+            # of them over tool findings that were thrown away unread.
+            #
+            # Falling back is not reporting the tool finding. The tool findings
+            # become hypotheses, and the verifier still has to confirm each one on
+            # the code, so a wrong tool finding costs one question and is
+            # rejected. What it stops is evidence that already exists in the
+            # report being dropped on the floor because the model preferred its
+            # own list to it.
+            #
+            # The predicate lives in its own method because the offline replay
+            # harness has to make the same decision; when the two disagreed, the
+            # harness silently reproduced a pipeline that never ran.
             hypotheses = self._fallback_hypotheses(report)
             if hypotheses:
                 result.metadata["scanner_fallback"] = True
+                result.metadata["scanner_fallback_reason"] = reason
 
         result.metadata["hypotheses_proposed"] = len(hypotheses)
         result.metadata["hypotheses_truncated"] = len(hypotheses) > self.cfg.max_hypotheses
@@ -236,7 +281,7 @@ class MultiAgentPipeline:
 
         verifications = await asyncio.gather(
             *[
-                self._verify_claim(claim, scan_packet, result, source)
+                self._verify_claim(claim, scan_packet, result, source, functions)
                 for claim in claims
             ],
             return_exceptions=True,
@@ -320,6 +365,7 @@ class MultiAgentPipeline:
         scan_packet: Dict[str, Any],
         result: Phase2Report,
         source: str,
+        functions: Sequence[Dict[str, Any]] = (),
     ) -> List[Tuple[FinalDecision, Optional[ReportFinding]]]:
         """Verify one claim site by site until the verifier confirms it.
 
@@ -331,7 +377,9 @@ class MultiAgentPipeline:
         """
         out: List[Tuple[FinalDecision, Optional[ReportFinding]]] = []
         for site in self._sites(claim):
-            outcome = await self._verify_one(site[0], scan_packet, result, source)
+            outcome = await self._verify_one(
+                site[0], scan_packet, result, source, functions
+            )
             if outcome is None:
                 break  # the verifier failed; the error is already recorded
             out.append(outcome)
@@ -391,6 +439,47 @@ class MultiAgentPipeline:
             if str(cwe).strip().upper() == hypothesis.cwe.upper():
                 return True
         return False
+
+    @staticmethod
+    def _fallback_reason(
+        empty: bool,
+        scanner_failed: bool,
+        proposed: int,
+        tool_findings: Sequence[Any],
+    ) -> str:
+        """Why the tool findings stand in for the Scanner's own hypotheses.
+
+        Returns the empty string when silence is the right answer -- nothing was
+        proposed, nothing failed, and the tools found nothing either, so there is
+        no evidence in the report to ask about.
+
+        Three ways to get here, and the third is the one that was missing:
+
+        * ``scanner_failed`` -- the call did not come back. A transport failure
+          is not a judgement, and scoring it as "nothing here" turns it into a
+          negative sample.
+        * ``all_hypotheses_dropped_as_echoes`` -- the Scanner did answer, and
+          every hypothesis it proposed was a restatement of a tool finding, so
+          the echo list is what deserves the verifier.
+        * ``scanner_declined_but_tools_flagged_the_file`` -- the Scanner
+          answered with an empty list while Phase 1 had findings. That is a
+          considered "no", not a failure, but discarding the tools' findings
+          anyway made the leg weaker than the static baseline it extends: only
+          CONFIRMED Phase 2 decisions become predictions, so a tool finding the
+          Scanner did not restate became no finding at all.
+
+        Kept separate from :meth:`analyze_file` so the offline replay harness
+        cannot make a different decision than the pipeline did.
+        """
+        if not empty:
+            return ""
+        if scanner_failed:
+            return "scanner_failed"
+        if proposed:
+            return "all_hypotheses_dropped_as_echoes"
+        if tool_findings:
+            return "scanner_declined_but_tools_flagged_the_file"
+        return ""
 
     @staticmethod
     def _fallback_hypotheses(report: Dict[str, Any]) -> List[Hypothesis]:
@@ -617,6 +706,7 @@ class MultiAgentPipeline:
         scan_packet: Dict[str, Any],
         result: Phase2Report,
         source: str,
+        functions: Sequence[Dict[str, Any]] = (),
     ) -> Optional[Tuple[FinalDecision, Optional[ReportFinding]]]:
         """Verify one hypothesis; ``None`` when the verifier itself failed.
 
@@ -638,7 +728,7 @@ class MultiAgentPipeline:
                 "file": scan_packet.get("file"),
                 "hypothesis": hypothesis.to_dict(),
                 "source_context": self._context_at(
-                    scan_packet, hypothesis.line, source
+                    scan_packet, hypothesis.line, source, functions
                 ),
                 "dataflow_chains": chains,
             }
@@ -878,14 +968,25 @@ class MultiAgentPipeline:
         records the reason it fired so the report shows the candidate was
         dropped for a stated cause rather than silently.
 
-        Three of the gates are about the verifier contradicting itself.
-        ``chain_verified`` and ``missing_evidence`` are both read by this
-        function, so a verdict that sets them inconsistently with its decision
-        is a malformed verdict rather than a well-supported finding.
+        Both chain gates exist to read the Verifier's own verdict, not the engine's.
+        The engine's disagreement is scoped to the classes it actually models
+        (``taint_modelled``), because outside them "is there a source-to-sink
+        path" is not a question about the defect -- but that scoping belongs to
+        the engine gate, which is asking whether the *tracker* contradicted the
+        model. ``chain_verified`` is the *model* reporting on its own reasoning,
+        and it is a useful negative signal on every class, so it is enforced
+        everywhere. The exemption was tried and measured; see the comment at
+        that gate.
 
-        ``engine_silent`` is what keeps the chain gate from being vacuous.
-        The gate may only overrule a confirmation when the engine had paths to
-        offer and none of them reached this sink -- that is the engine
+        ``missing_evidence`` is read without scoping, and the model volunteering
+        "no recovered chain reaches this sink" while confirming is the one
+        self-contradiction that needs no engine to corroborate it -- it is the
+        model's own statement, and the recorded run filled the field on 66 of 66
+        confirmations because the prompt invited it to.
+
+        ``engine_silent`` is what keeps the engine's disagreement gate from
+        being vacuous. It may only overrule a confirmation when the engine had
+        paths to offer and none of them reached this sink -- that is the engine
         disagreeing with the model, and disagreement is evidence. When the
         engine recovered no path at all for the file it has not disagreed with
         anything; it has said nothing, and treating silence as a refutation
@@ -893,14 +994,6 @@ class MultiAgentPipeline:
         engine cannot analyse. Measured on a function-level C benchmark that is
         53 of 60 files, which is why it was the single largest source of lost
         recall.
-
-        That stand-down is also why ``chain_verified`` is caught the other way
-        round. Silence cannot be read as a refuted path, so a confirmation that
-        sets ``chain_verified`` true on a file the tracker said nothing about
-        is not provably wrong -- but the model volunteering "no recovered chain
-        reaches this sink" in ``missing_evidence`` while confirming *is*
-        evidence, and it is the model's own statement rather than an inference,
-        so it needs no engine to corroborate it.
         """
         cwes = verification.cwe or ([hypothesis.cwe] if hypothesis.cwe else [])
 
@@ -908,6 +1001,22 @@ class MultiAgentPipeline:
         # agree with it. A model that confirms a hypothesis while reporting the
         # chain as unverified has contradicted itself, and the contradiction is
         # resolved by dropping the finding rather than by trusting either half.
+        #
+        # The obvious repair here is to exempt the classes the tracker does not
+        # model, on the grounds that an out-of-bounds read off a direct index has
+        # no taint flow and so cannot truthfully assert one. Measured on the
+        # recorded C benchmark, that exemption is a bad trade and it was reverted:
+        # it admitted 18 findings and exactly 1 of them was a true positive,
+        # taking precision from 0.400 to 0.130 for recall 0.091 -> 0.136.
+        #
+        # The reason is that ``chain_verified: false`` is not only a statement
+        # about dataflow. For these classes it is where the model puts "I could
+        # not establish this", which on this corpus is usually a true thing to
+        # say -- the Verifier's own rejections name the missing check far more
+        # often than not. Exempting the gate did not remove a wrong requirement;
+        # it removed a useful negative signal and supplied no correct one in its
+        # place. The engine gate below keeps its own scoping, where the question
+        # is whether the *engine* said something, which is a different claim.
         if not verification.chain_verified:
             return (
                 "verifier did not confirm the source-to-sink chain "
@@ -1210,7 +1319,11 @@ class MultiAgentPipeline:
         return near or list(findings)
 
     def _context_at(
-        self, packet: Dict[str, Any], line: Optional[int], source: str
+        self,
+        packet: Dict[str, Any],
+        line: Optional[int],
+        source: str,
+        functions: Sequence[Dict[str, Any]] = (),
     ) -> Dict[str, Any]:
         """The source around one hypothesis, read from the real path.
 
@@ -1220,11 +1333,47 @@ class MultiAgentPipeline:
         that rewritten path fails with ENOENT and leaves the verifier with an
         empty snippet — so the unsanitised path is passed in explicitly instead
         of being taken back out of the packet.
+
+        window is widened to the enclosing function. A defect is a property
+        of an operation, not of a line: the allocation, the bounds check and the
+        write that makes it a bug are frequently ten lines apart, and a window
+        that excludes the check leaves the Verifier reasoning correctly about a
+        snippet that cannot support the claim either way.
+
+        The bounds are threaded in from the Phase 1 structural index rather than
+        read out of the packet, so that widening the window does not quietly
+        become structural *evidence*: leg C is defined as the run with no
+        structural evidence, and adding a function index to its packets would
+        make the ablation measure something other than what it says. Both legs
+        get the same window; only the evidence differs.
         """
         context = packet.get("source_context") or {}
         if line is None or not context.get("available"):
             return context
-        return load_source_context(source, line, self.cfg.context_radius)
+        return load_source_context(
+            source,
+            line,
+            self.cfg.context_radius,
+            bounds=self._function_bounds(functions, line),
+            max_lines=self.cfg.context_max_lines,
+        )
+
+    @staticmethod
+    def _function_bounds(
+        functions: Sequence[Dict[str, Any]], line: Optional[int]
+    ) -> Optional[tuple[int, int]]:
+        """The ``(start, end)`` of the function containing ``line``, if known."""
+        if line is None:
+            return None
+        for function in functions or ():
+            try:
+                start = int(function.get("start_line"))
+                end = int(function.get("end_line"))
+            except (TypeError, ValueError):
+                continue
+            if start <= line <= end and start < end:
+                return (start, end)
+        return None
 
     @staticmethod
     def _best_chain(
