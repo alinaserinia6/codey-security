@@ -149,64 +149,65 @@
   #text(
     dir: rtl,
     diagram(
-      spacing: (0.95cm, 0.95cm),
+      spacing: (0.7cm, 0.8cm), // کاهش فاصله ستون‌ها
 
-      node((0, 0), rect(width: 105pt, height: 60pt, [
+      node((0, 0), rect(width: 85pt, height: 55pt, [
         فایل‌های
         \
-        #text(size: 9pt)[پایتون، C و ++C]
-        #v(10%)
+        #text(size: 8.5pt)[پایتون، C و ++C]
+        #v(5%)
       ])),
 
-      node((2, 0), rect(width: 105pt, height: 60pt, [
+      node((1, 0), rect(width: 95pt, height: 55pt, [
         فاز یک
         \
-        #text(size: 9pt)[شواهد قطعی و همبسته‌سازی]
-        #v(10%)
+        #text(size: 8.5pt)[شواهد قطعی و همبسته‌سازی]
+        #v(5%)
       ])),
 
-      node((4, 0), rect(width: 105pt, height: 60pt, [
+      node((2, 0), rect(width: 85pt, height: 55pt, [
         فاز دو
         \
-        #text(size: 9pt)[جستجوگر و ارزیاب]
-        #v(10%)
+        #text(size: 8.5pt)[جستجوگر و ارزیاب]
+        #v(5%)
       ])),
 
-      node((6, 0), rect(width: 105pt, height: 60pt, [
+      node((3, 0), rect(width: 85pt, height: 55pt, [
         فاز سه
         \
-        #text(size: 9pt)[ارزیابی مستقل]
-        #v(10%)
+        #text(size: 8.5pt)[ارزیابی مستقل]
+        #v(5%)
       ])),
 
-      node((6, 2), rect(width: 105pt, height: 60pt, [
+      node((3, 1), rect(width: 85pt, height: 55pt, [
         گزارش نهایی
         \
-        #text(size: 9pt)[یافته‌های تأییدشده]
-        #v(10%)
+        #text(size: 8.5pt)[یافته‌های تأییدشده]
+        #v(5%)
       ])),
 
-      node((2, 2), rect(width: 195pt, height: 60pt, [
-        #text(size: 9pt)[شواهد قطعی: ساختار درخت نحوی، فهرست فراخوانی‌ها،]
+      // قرار دادن دقیق این گره در مرکز فاز یک و دو
+      node((1.5, 1), rect(width: 175pt, height: 55pt, [
+        #text(size: 8.5pt)[شواهد قطعی: ساختار درخت نحوی، فهرست فراخوانی‌ها،]
         \
-        #text(size: 9pt)[قطعهٔ کد پاک‌سازی‌شده و پیام ابزار]
-        #v(10%)
+        #text(size: 8.5pt)[قطعهٔ کد پاک‌سازی‌شده و پیام ابزار]
+        #v(5%)
       ])),
 
-      node((0, 2), rect(width: 105pt, height: 60pt, [
+      node((0, 1), rect(width: 85pt, height: 55pt, [
         مجموعه‌های ارزیابی
         \
-        #text(size: 9pt)[جولیت، پایتون و دیویگن]
-        #v(10%)
+        #text(size: 8.5pt)[جولیت، پایتون و دیویگن]
+        #v(5%)
       ])),
 
-      edge((0, 0), (2, 0), "-|>"),
-      edge((2, 0), (4, 0), "-|>"),
-      edge((4, 0), (6, 0), "-|>"),
-      edge((6, 0), (6, 2), "-|>"),
-      edge((4, 0), (2, 2), "-<|-"),
-      edge((0, 2), (0, 0), "-<|-"),
-      edge((6, 2), (6, 0), [dashed, "-|>"]),
+      edge((0, 0), (1, 0), "-|>"),
+      edge((1, 0), (2, 0), "-|>"),
+      edge((2, 0), (3, 0), "-|>"),
+      edge((3, 0), (3, 1), "-|>"),
+      edge((2, 0), (1.5, 1), "-<|-"), 
+      edge((0, 1), (0, 0), "-<|-"),
+      edge((3, 1), (3, 0), "-|>", stroke: (dash: "dashed")),
     ),
   )
   #text(
@@ -316,19 +317,19 @@
   #text(
     dir: rtl,
     diagram(
-      spacing: (0.9cm, 0.9cm),
+      spacing: (0.3cm, 0.9cm),
 
-      node((0, 0), rect(width: 100pt, height: 52pt, [
+      node((0, 0), rect(width: 90pt, height: 52pt, [
         #text(size: 9pt)[یافته‌های خام ابزارها]
         #v(8%)
       ])),
 
-      node((2, 0), rect(width: 100pt, height: 52pt, [
+      node((2, 0), rect(width: 90pt, height: 52pt, [
         #text(size: 9pt)[حذف تکرار با اثر انگشت]
         #v(8%)
       ])),
 
-      node((4, 0), rect(width: 100pt, height: 52pt, [
+      node((4, 0), rect(width: 90pt, height: 52pt, [
         #text(size: 9pt)[تطبیق خط با دریچهٔ خط]
         #v(8%)
       ])),
