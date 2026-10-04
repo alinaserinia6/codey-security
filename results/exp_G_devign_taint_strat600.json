@@ -1,0 +1,84 @@
+{
+  "dataset": "/tmp/opencode/devign_out/devign_stratified_600.json",
+  "samples": 600,
+  "parsed": 600,
+  "errors": 0,
+  "missing": 0,
+  "failures": [],
+  "metrics": {
+    "any_source_to_sink_path": {
+      "tp": 18,
+      "fp": 24,
+      "fn": 282,
+      "tn": 276,
+      "precision": 0.428571,
+      "recall": 0.06,
+      "f1": 0.105263,
+      "benign_flag_rate": 0.08
+    },
+    "source_to_sink_path_without_mitigation": {
+      "tp": 17,
+      "fp": 21,
+      "fn": 283,
+      "tn": 279,
+      "precision": 0.447368,
+      "recall": 0.056667,
+      "f1": 0.100592,
+      "benign_flag_rate": 0.07
+    },
+    "union_with_baseline": {
+      "tp": 20,
+      "fp": 29,
+      "fn": 280,
+      "tn": 271,
+      "precision": 0.408163,
+      "recall": 0.066667,
+      "f1": 0.114613,
+      "benign_flag_rate": 0.096667
+    }
+  },
+  "per_cwe_recall": {
+    "unknown": {
+      "detected": 17,
+      "total": 300,
+      "recall": 0.056667
+    }
+  },
+  "sink_categories": {
+    "buffer_overflow": 81,
+    "path_traversal": 6,
+    "command_injection": 1
+  },
+  "mitigations_recognised": {
+    "constant-length": 24,
+    "length-bounded": 1
+  },
+  "per_language": {
+    "c": {
+      "samples": 600,
+      "tp": 17,
+      "fp": 21,
+      "fn": 283,
+      "tn": 279,
+      "precision": 0.447368,
+      "recall": 0.056667,
+      "f1": 0.100592,
+      "benign_flag_rate": 0.07
+    }
+  },
+  "languages_without_evidence_support": {},
+  "baseline": {
+    "tool": "flawfinder",
+    "metrics": {
+      "tp": 6,
+      "fp": 11,
+      "fn": 294,
+      "tn": 289,
+      "precision": 0.352941,
+      "recall": 0.02,
+      "f1": 0.037855,
+      "benign_flag_rate": 0.036667
+    },
+    "tool_errors": []
+  }
+}

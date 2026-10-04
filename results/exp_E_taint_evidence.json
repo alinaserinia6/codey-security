@@ -1,0 +1,100 @@
+{
+  "dataset": "datasets/eval_subset_600.json",
+  "samples": 600,
+  "parsed": 600,
+  "errors": 0,
+  "missing": 0,
+  "failures": [],
+  "metrics": {
+    "any_source_to_sink_path": {
+      "tp": 26,
+      "fp": 33,
+      "fn": 274,
+      "tn": 267,
+      "precision": 0.440678,
+      "recall": 0.086667,
+      "f1": 0.144847,
+      "benign_flag_rate": 0.11
+    },
+    "source_to_sink_path_without_mitigation": {
+      "tp": 7,
+      "fp": 7,
+      "fn": 293,
+      "tn": 293,
+      "precision": 0.5,
+      "recall": 0.023333,
+      "f1": 0.044586,
+      "benign_flag_rate": 0.023333
+    },
+    "union_with_baseline": {
+      "tp": 13,
+      "fp": 11,
+      "fn": 287,
+      "tn": 289,
+      "precision": 0.541667,
+      "recall": 0.043333,
+      "f1": 0.080247,
+      "benign_flag_rate": 0.036667
+    }
+  },
+  "per_cwe_recall": {
+    "CWE-122": {
+      "detected": 7,
+      "total": 150,
+      "recall": 0.046667
+    },
+    "CWE-190": {
+      "detected": 0,
+      "total": 150,
+      "recall": 0.0
+    }
+  },
+  "sink_categories": {
+    "buffer_overflow": 61
+  },
+  "mitigations_recognised": {
+    "constant-length": 31,
+    "length-bounded": 12,
+    "sized-destination": 4
+  },
+  "per_language": {
+    "c": {
+      "samples": 299,
+      "tp": 2,
+      "fp": 3,
+      "fn": 156,
+      "tn": 138,
+      "precision": 0.4,
+      "recall": 0.012658,
+      "f1": 0.02454,
+      "benign_flag_rate": 0.021277
+    },
+    "cpp": {
+      "samples": 301,
+      "tp": 5,
+      "fp": 4,
+      "fn": 137,
+      "tn": 155,
+      "precision": 0.555556,
+      "recall": 0.035211,
+      "f1": 0.066225,
+      "benign_flag_rate": 0.025157
+    }
+  },
+  "languages_without_evidence_support": {},
+  "baseline": {
+    "tool": "flawfinder",
+    "metrics": {
+      "tp": 13,
+      "fp": 10,
+      "fn": 287,
+      "tn": 290,
+      "precision": 0.565217,
+      "recall": 0.043333,
+      "f1": 0.080495,
+      "benign_flag_rate": 0.033333
+    },
+    "tool_errors": [],
+    "unavailable_samples": 0
+  }
+}

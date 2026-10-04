@@ -9,6 +9,23 @@ __pycache__/
 htmlcov/
 .env
 .DS_Store
-results/
+# Scratch runs stay local; only the frozen evidence set behind the thesis is
+# version-controlled (see README, "Results").
+results/*
+!results/exp_A_static.json
+!results/exp_A_static_subset600.json
+!results/exp_B_llm_only_eval600.json
+!results/exp_C_static_llm_subset600.json
+!results/exp_D_static_structural_llm_subset600.json
+!results/exp_E_taint_evidence.json
+!results/exp_F_python_bench.json
+!results/exp_G_devign_taint_full.json
+!results/exp_G_devign_taint_strat600.json
+!results/comparison_all.csv
 *.log
-datasets/
+datasets/*
+!datasets/.gitkeep
+!datasets/manifest.example.json
+!datasets/eval_subset_600.json
+!datasets/juliet_test.json
+!datasets/python_bench/

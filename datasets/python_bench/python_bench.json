@@ -1,0 +1,745 @@
+{
+  "dataset": {
+    "name": "synthetic-python-paired",
+    "root": "/home/ali/codey-security/datasets/python_bench",
+    "generator": "scripts/make_python_bench.py",
+    "generator_version": "1",
+    "synthetic": true,
+    "sample_count": 48,
+    "vulnerable_count": 24,
+    "benign_count": 24,
+    "pairing": "each scenario exists as a _bad and a _good variant",
+    "limitations": "Synthetic paired corpus generated from templates. It covers the Python families in the proposal scope and is intended for controlled comparison of detection and false-alarm rates, not as a substitute for SARD or any real-world Python corpus.",
+    "per_cwe": {
+      "CWE-1336": 8,
+      "CWE-22": 8,
+      "CWE-502": 8,
+      "CWE-78": 8,
+      "CWE-89": 8,
+      "CWE-94": 8
+    },
+    "digest": "e297ef9927645256"
+  },
+  "samples": [
+    {
+      "sample_id": "CWE-78_command_injection_subprocess_shell_true_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_subprocess_shell_true_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-78_command_injection_subprocess_shell_true",
+      "variant": "bad",
+      "scenario": "CWE-78_command_injection_subprocess_shell_true",
+      "language": "python",
+      "description": "bad variant of the command_injection scenario subprocess_shell_true (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-78_command_injection_subprocess_shell_true_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_subprocess_shell_true_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-78_command_injection_subprocess_shell_true",
+      "variant": "good",
+      "scenario": "CWE-78_command_injection_subprocess_shell_true",
+      "language": "python",
+      "description": "good variant of the command_injection scenario subprocess_shell_true (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-78_command_injection_os_system_argv_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_os_system_argv_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-78_command_injection_os_system_argv",
+      "variant": "bad",
+      "scenario": "CWE-78_command_injection_os_system_argv",
+      "language": "python",
+      "description": "bad variant of the command_injection scenario os_system_argv (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-78_command_injection_os_system_argv_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_os_system_argv_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-78_command_injection_os_system_argv",
+      "variant": "good",
+      "scenario": "CWE-78_command_injection_os_system_argv",
+      "language": "python",
+      "description": "good variant of the command_injection scenario os_system_argv (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-78_command_injection_os_popen_formatted_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_os_popen_formatted_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-78_command_injection_os_popen_formatted",
+      "variant": "bad",
+      "scenario": "CWE-78_command_injection_os_popen_formatted",
+      "language": "python",
+      "description": "bad variant of the command_injection scenario os_popen_formatted (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-78_command_injection_os_popen_formatted_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_os_popen_formatted_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-78_command_injection_os_popen_formatted",
+      "variant": "good",
+      "scenario": "CWE-78_command_injection_os_popen_formatted",
+      "language": "python",
+      "description": "good variant of the command_injection scenario os_popen_formatted (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-78_command_injection_subprocess_popen_shell_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_subprocess_popen_shell_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-78_command_injection_subprocess_popen_shell",
+      "variant": "bad",
+      "scenario": "CWE-78_command_injection_subprocess_popen_shell",
+      "language": "python",
+      "description": "bad variant of the command_injection scenario subprocess_popen_shell (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-78_command_injection_subprocess_popen_shell_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-78_command_injection_subprocess_popen_shell_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-78"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-78_command_injection_subprocess_popen_shell",
+      "variant": "good",
+      "scenario": "CWE-78_command_injection_subprocess_popen_shell",
+      "language": "python",
+      "description": "good variant of the command_injection scenario subprocess_popen_shell (CWE-78)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_eval_request_field_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_eval_request_field_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": 6,
+      "function": null,
+      "group_id": "CWE-94_code_injection_eval_request_field",
+      "variant": "bad",
+      "scenario": "CWE-94_code_injection_eval_request_field",
+      "language": "python",
+      "description": "bad variant of the code_injection scenario eval_request_field (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_eval_request_field_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_eval_request_field_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-94_code_injection_eval_request_field",
+      "variant": "good",
+      "scenario": "CWE-94_code_injection_eval_request_field",
+      "language": "python",
+      "description": "good variant of the code_injection scenario eval_request_field (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_exec_request_field_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_exec_request_field_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": 6,
+      "function": null,
+      "group_id": "CWE-94_code_injection_exec_request_field",
+      "variant": "bad",
+      "scenario": "CWE-94_code_injection_exec_request_field",
+      "language": "python",
+      "description": "bad variant of the code_injection scenario exec_request_field (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_exec_request_field_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_exec_request_field_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-94_code_injection_exec_request_field",
+      "variant": "good",
+      "scenario": "CWE-94_code_injection_exec_request_field",
+      "language": "python",
+      "description": "good variant of the code_injection scenario exec_request_field (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_eval_flask_request_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_eval_flask_request_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-94_code_injection_eval_flask_request",
+      "variant": "bad",
+      "scenario": "CWE-94_code_injection_eval_flask_request",
+      "language": "python",
+      "description": "bad variant of the code_injection scenario eval_flask_request (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_eval_flask_request_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_eval_flask_request_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": 11,
+      "function": null,
+      "group_id": "CWE-94_code_injection_eval_flask_request",
+      "variant": "good",
+      "scenario": "CWE-94_code_injection_eval_flask_request",
+      "language": "python",
+      "description": "good variant of the code_injection scenario eval_flask_request (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_eval_nested_call_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_eval_nested_call_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-94_code_injection_eval_nested_call",
+      "variant": "bad",
+      "scenario": "CWE-94_code_injection_eval_nested_call",
+      "language": "python",
+      "description": "bad variant of the code_injection scenario eval_nested_call (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-94_code_injection_eval_nested_call_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-94_code_injection_eval_nested_call_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-94"
+      ],
+      "line": null,
+      "function": null,
+      "group_id": "CWE-94_code_injection_eval_nested_call",
+      "variant": "good",
+      "scenario": "CWE-94_code_injection_eval_nested_call",
+      "language": "python",
+      "description": "good variant of the code_injection scenario eval_nested_call (CWE-94)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_render_template_string_argv_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_render_template_string_argv_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": 1,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_render_template_string_argv",
+      "variant": "bad",
+      "scenario": "CWE-1336_template_injection_render_template_string_argv",
+      "language": "python",
+      "description": "bad variant of the template_injection scenario render_template_string_argv (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_render_template_string_argv_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_render_template_string_argv_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": 1,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_render_template_string_argv",
+      "variant": "good",
+      "scenario": "CWE-1336_template_injection_render_template_string_argv",
+      "language": "python",
+      "description": "good variant of the template_injection scenario render_template_string_argv (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_jinja_from_string_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_jinja_from_string_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_jinja_from_string",
+      "variant": "bad",
+      "scenario": "CWE-1336_template_injection_jinja_from_string",
+      "language": "python",
+      "description": "bad variant of the template_injection scenario jinja_from_string (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_jinja_from_string_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_jinja_from_string_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": null,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_jinja_from_string",
+      "variant": "good",
+      "scenario": "CWE-1336_template_injection_jinja_from_string",
+      "language": "python",
+      "description": "good variant of the template_injection scenario jinja_from_string (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_render_template_string_request_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_render_template_string_request_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": 1,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_render_template_string_request",
+      "variant": "bad",
+      "scenario": "CWE-1336_template_injection_render_template_string_request",
+      "language": "python",
+      "description": "bad variant of the template_injection scenario render_template_string_request (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_render_template_string_request_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_render_template_string_request_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": 1,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_render_template_string_request",
+      "variant": "good",
+      "scenario": "CWE-1336_template_injection_render_template_string_request",
+      "language": "python",
+      "description": "good variant of the template_injection scenario render_template_string_request (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_template_concat_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_template_concat_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_template_concat",
+      "variant": "bad",
+      "scenario": "CWE-1336_template_injection_template_concat",
+      "language": "python",
+      "description": "bad variant of the template_injection scenario template_concat (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-1336_template_injection_template_concat_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-1336_template_injection_template_concat_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-1336"
+      ],
+      "line": null,
+      "function": null,
+      "group_id": "CWE-1336_template_injection_template_concat",
+      "variant": "good",
+      "scenario": "CWE-1336_template_injection_template_concat",
+      "language": "python",
+      "description": "good variant of the template_injection scenario template_concat (CWE-1336)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_pickle_loads_request_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_pickle_loads_request_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": 11,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_pickle_loads_request",
+      "variant": "bad",
+      "scenario": "CWE-502_unsafe_deserialization_pickle_loads_request",
+      "language": "python",
+      "description": "bad variant of the unsafe_deserialization scenario pickle_loads_request (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_pickle_loads_request_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_pickle_loads_request_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": null,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_pickle_loads_request",
+      "variant": "good",
+      "scenario": "CWE-502_unsafe_deserialization_pickle_loads_request",
+      "language": "python",
+      "description": "good variant of the unsafe_deserialization scenario pickle_loads_request (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_yaml_load_unsafe_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_yaml_load_unsafe_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_yaml_load_unsafe",
+      "variant": "bad",
+      "scenario": "CWE-502_unsafe_deserialization_yaml_load_unsafe",
+      "language": "python",
+      "description": "bad variant of the unsafe_deserialization scenario yaml_load_unsafe (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_yaml_load_unsafe_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_yaml_load_unsafe_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": null,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_yaml_load_unsafe",
+      "variant": "good",
+      "scenario": "CWE-502_unsafe_deserialization_yaml_load_unsafe",
+      "language": "python",
+      "description": "good variant of the unsafe_deserialization scenario yaml_load_unsafe (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_marshal_loads_file_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_marshal_loads_file_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_marshal_loads_file",
+      "variant": "bad",
+      "scenario": "CWE-502_unsafe_deserialization_marshal_loads_file",
+      "language": "python",
+      "description": "bad variant of the unsafe_deserialization scenario marshal_loads_file (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_marshal_loads_file_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_marshal_loads_file_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_marshal_loads_file",
+      "variant": "good",
+      "scenario": "CWE-502_unsafe_deserialization_marshal_loads_file",
+      "language": "python",
+      "description": "good variant of the unsafe_deserialization scenario marshal_loads_file (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_pickle_loads_bytes_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_pickle_loads_bytes_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_pickle_loads_bytes",
+      "variant": "bad",
+      "scenario": "CWE-502_unsafe_deserialization_pickle_loads_bytes",
+      "language": "python",
+      "description": "bad variant of the unsafe_deserialization scenario pickle_loads_bytes (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-502_unsafe_deserialization_pickle_loads_bytes_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-502_unsafe_deserialization_pickle_loads_bytes_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-502"
+      ],
+      "line": null,
+      "function": null,
+      "group_id": "CWE-502_unsafe_deserialization_pickle_loads_bytes",
+      "variant": "good",
+      "scenario": "CWE-502_unsafe_deserialization_pickle_loads_bytes",
+      "language": "python",
+      "description": "good variant of the unsafe_deserialization scenario pickle_loads_bytes (CWE-502)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_cursor_execute_fstring_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_cursor_execute_fstring_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_cursor_execute_fstring",
+      "variant": "bad",
+      "scenario": "CWE-89_sql_injection_cursor_execute_fstring",
+      "language": "python",
+      "description": "bad variant of the sql_injection scenario cursor_execute_fstring (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_cursor_execute_fstring_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_cursor_execute_fstring_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_cursor_execute_fstring",
+      "variant": "good",
+      "scenario": "CWE-89_sql_injection_cursor_execute_fstring",
+      "language": "python",
+      "description": "good variant of the sql_injection scenario cursor_execute_fstring (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_cursor_execute_concat_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_cursor_execute_concat_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_cursor_execute_concat",
+      "variant": "bad",
+      "scenario": "CWE-89_sql_injection_cursor_execute_concat",
+      "language": "python",
+      "description": "bad variant of the sql_injection scenario cursor_execute_concat (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_cursor_execute_concat_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_cursor_execute_concat_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_cursor_execute_concat",
+      "variant": "good",
+      "scenario": "CWE-89_sql_injection_cursor_execute_concat",
+      "language": "python",
+      "description": "good variant of the sql_injection scenario cursor_execute_concat (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_raw_query_format_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_raw_query_format_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_raw_query_format",
+      "variant": "bad",
+      "scenario": "CWE-89_sql_injection_raw_query_format",
+      "language": "python",
+      "description": "bad variant of the sql_injection scenario raw_query_format (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_raw_query_format_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_raw_query_format_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_raw_query_format",
+      "variant": "good",
+      "scenario": "CWE-89_sql_injection_raw_query_format",
+      "language": "python",
+      "description": "good variant of the sql_injection scenario raw_query_format (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_execute_percent_format_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_execute_percent_format_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_execute_percent_format",
+      "variant": "bad",
+      "scenario": "CWE-89_sql_injection_execute_percent_format",
+      "language": "python",
+      "description": "bad variant of the sql_injection scenario execute_percent_format (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-89_sql_injection_execute_percent_format_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-89_sql_injection_execute_percent_format_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-89"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-89_sql_injection_execute_percent_format",
+      "variant": "good",
+      "scenario": "CWE-89_sql_injection_execute_percent_format",
+      "language": "python",
+      "description": "good variant of the sql_injection scenario execute_percent_format (CWE-89)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_open_join_request_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_open_join_request_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 11,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_open_join_request",
+      "variant": "bad",
+      "scenario": "CWE-22_path_traversal_open_join_request",
+      "language": "python",
+      "description": "bad variant of the path_traversal scenario open_join_request (CWE-22)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_open_join_request_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_open_join_request_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 12,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_open_join_request",
+      "variant": "good",
+      "scenario": "CWE-22_path_traversal_open_join_request",
+      "language": "python",
+      "description": "good variant of the path_traversal scenario open_join_request (CWE-22)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_send_file_join_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_send_file_join_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 11,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_send_file_join",
+      "variant": "bad",
+      "scenario": "CWE-22_path_traversal_send_file_join",
+      "language": "python",
+      "description": "bad variant of the path_traversal scenario send_file_join (CWE-22)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_send_file_join_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_send_file_join_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 12,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_send_file_join",
+      "variant": "good",
+      "scenario": "CWE-22_path_traversal_send_file_join",
+      "language": "python",
+      "description": "good variant of the path_traversal scenario send_file_join (CWE-22)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_os_remove_join_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_os_remove_join_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_os_remove_join",
+      "variant": "bad",
+      "scenario": "CWE-22_path_traversal_os_remove_join",
+      "language": "python",
+      "description": "bad variant of the path_traversal scenario os_remove_join (CWE-22)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_os_remove_join_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_os_remove_join_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 10,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_os_remove_join",
+      "variant": "good",
+      "scenario": "CWE-22_path_traversal_os_remove_join",
+      "language": "python",
+      "description": "good variant of the path_traversal scenario os_remove_join (CWE-22)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_shutil_rmtree_user_bad",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_shutil_rmtree_user_bad.py",
+      "vulnerable": true,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 9,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_shutil_rmtree_user",
+      "variant": "bad",
+      "scenario": "CWE-22_path_traversal_shutil_rmtree_user",
+      "language": "python",
+      "description": "bad variant of the path_traversal scenario shutil_rmtree_user (CWE-22)"
+    },
+    {
+      "sample_id": "CWE-22_path_traversal_shutil_rmtree_user_good",
+      "file": "/home/ali/codey-security/datasets/python_bench/scenarios/CWE-22_path_traversal_shutil_rmtree_user_good.py",
+      "vulnerable": false,
+      "cwe": [
+        "CWE-22"
+      ],
+      "line": 13,
+      "function": null,
+      "group_id": "CWE-22_path_traversal_shutil_rmtree_user",
+      "variant": "good",
+      "scenario": "CWE-22_path_traversal_shutil_rmtree_user",
+      "language": "python",
+      "description": "good variant of the path_traversal scenario shutil_rmtree_user (CWE-22)"
+    }
+  ]
+}
