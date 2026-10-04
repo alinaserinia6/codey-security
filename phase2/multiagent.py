@@ -45,7 +45,7 @@ from .prompts import (
     VERIFIER_NUDGE,
     VERIFIER_PROMPT,
 )
-from .sanitize import sanitize_packet, sanitize_value
+from .sanitize import sanitize_packet, sanitize_source, sanitize_value
 
 JsonClient = Callable[[str, Dict[str, Any]], Awaitable[Dict[str, Any]]]
 
@@ -214,6 +214,10 @@ class MultiAgentPipeline:
             result.errors.append(f"scanner: {type(exc).__name__}: {exc}")
             scanner_failed = True
             hypotheses = []
+
+        hypotheses, unsited = self._drop_non_code_sites(source, hypotheses)
+        if unsited:
+            result.metadata["non_code_site_hypotheses"] = unsited
 
         proposed = len(hypotheses)
         if self.cfg.drop_tool_echoes:
@@ -674,6 +678,71 @@ class MultiAgentPipeline:
             packet["dataflow_chains"] = self._taint_chains(source, metadata)
 
         return sanitize_packet(packet)
+
+    @staticmethod
+    def _is_code_line(text: str) -> bool:
+        """Whether a source line can be the site of a defect.
+
+        A preprocessor directive, a comment and a blank line are all things a
+        defect can be *caused by* and none of them is a place one executes. The
+        Scanner was asked for the line the unsafe operation is on and answered
+        with ``#define LISTEN_BACKLOG 5``, which the Verifier then rejected for
+        being a macro -- correctly, having been handed a question with no
+        answer in it.
+
+        Dropping these here is free precision and it is free recall: such a
+        hypothesis cannot be confirmed by any evidence, so it costs a Verifier
+        pass and can only ever contribute a rejection. It also frees a slot
+        under ``max_hypotheses`` for a site that can be judged.
+        """
+        stripped = text.strip()
+        if not stripped:
+            return False
+        if stripped.startswith(("#", "//", "/*", "*", "*/")):
+            return False
+        return True
+
+    def _drop_non_code_sites(
+        self, source: str, hypotheses: Sequence[Hypothesis]
+    ) -> Tuple[List[Hypothesis], List[Dict[str, Any]]]:
+        """Remove hypotheses sited on a line that cannot execute.
+
+        The line is read through the same sanitiser the evidence packet uses,
+        so a site is judged against the text the Verifier will actually see
+        rather than against the file on disk.
+        """
+        kept: List[Hypothesis] = []
+        dropped: List[Dict[str, Any]] = []
+        needed = {h.line for h in hypotheses if h.line}
+        if not needed:
+            return list(hypotheses), dropped
+        try:
+            pth = Path(source)
+            language = pth.suffix.lower()
+            try:
+                rawtext = pth.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return list(hypotheses), []
+            lines = sanitize_source(
+                rawtext,
+                "c" if language in {".c", ".h"} else None,
+                path=str(source),
+            ).splitlines()
+        except OSError:
+            return list(hypotheses), []
+        for hypothesis in hypotheses:
+            index = (hypothesis.line or 0) - 1
+            text = lines[index] if 0 <= index < len(lines) else None
+            if text is None or self._is_code_line(text):
+                # An unknown line is kept: the window may simply not reach it,
+                # and refusing to reason about code we did not read is how the
+                # evidence gate learned to throw away real findings.
+                kept.append(hypothesis)
+            else:
+                dropped.append(
+                    {"id": hypothesis.id, "cwe": hypothesis.cwe, "line": hypothesis.line}
+                )
+        return kept, dropped
 
     @staticmethod
     def _parse_hypotheses(raw: Any) -> List[Hypothesis]:

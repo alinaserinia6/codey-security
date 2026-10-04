@@ -453,10 +453,10 @@ def test_scanner_over_generation_is_absorbed_by_the_verifier(tmp_path):
     )
     result = run(agent, phase1_report(path))
 
-    assert result["metadata"]["hypotheses_proposed"] == 6
-    assert len(result["decisions"]) == 6
+    assert result["metadata"]["hypotheses_proposed"] == 4
+    assert len(result["decisions"]) == 4
     assert result["findings"] == []
-    assert result["metadata"]["decision_counts"]["REJECTED"] == 6
+    assert result["metadata"]["decision_counts"]["REJECTED"] == 4
 
 
 # -- robustness ----------------------------------------------------------
@@ -1404,9 +1404,9 @@ def test_a_repeated_claim_is_verified_once(tmp_path):
 
     verifier_calls = [p for s, p in agent.prompts if p.get("role") == "verifier"]
     assert len(verifier_calls) == 1, "one claim, one verifier pass"
-    assert result["metadata"]["hypotheses_proposed"] == 3
+    assert result["metadata"]["hypotheses_proposed"] == 2
     assert result["metadata"]["claims"] == 1
-    assert result["metadata"]["claims_merged"] == 2
+    assert result["metadata"]["claims_merged"] == 1
     assert len(result["decisions"]) == 1
     assert len(result["findings"]) == 1
     assert result["decisions"][0]["status"] == "CONFIRMED"
