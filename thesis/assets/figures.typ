@@ -1,5 +1,3 @@
-#import "@preview/cetz:0.4.0"
-#import "@preview/cetz-plot:0.1.2": chart
 #import "@preview/fletcher:0.5.8": diagram, edge, node
 
 #let figure-1-1 = align(center, [
@@ -86,7 +84,7 @@
       node((0, 1), rect(width: 92pt, height: 46pt, [
         #text(size: 9.5pt)[ابزارهای تحلیل ایستا]
         \
-        #text(size: 8pt)[cppcheck، flawfinder، clang]
+        #text(size: 8pt)[cppcheck، flawfinder، bandit]
         #v(4%)
       ])),
 
@@ -356,72 +354,163 @@
   #v(1%)
 ])
 
+#let _palette = (
+  rgb("#2b6cb0"),
+  rgb("#c05621"),
+  rgb("#2f855a"),
+  rgb("#718096"),
+)
+
+#let _legend(series, colors: _palette) = align(center, {
+  for (i, s) in series.enumerate() {
+    box(inset: (x: 5pt), baseline: 35%, [
+      #rect(
+        width: 18pt,
+        height: 9pt,
+        fill: colors.at(i),
+        stroke: 0.5pt + gray.lighten(45%),
+      )
+      #h(4pt)
+      #text(size: 10pt)[#s]
+    ])
+  }
+})
+
+/// Grouped horizontal bar chart.
+/// groups: ((label, (value, ...)), ...)
+/// series: (label, ...)
+#let grouped-bars(
+  groups,
+  series,
+  colors: _palette,
+  max: auto,
+  track: 6.9cm,
+) = {
+  let flat = groups.map(g => g.at(1)).flatten()
+  let mx = if max == auto { calc.max(..flat) } else { max }
+  let cells = ()
+  for g in groups {
+    for (i, s) in series.enumerate() {
+      let v = g.at(1).at(i)
+      let st = if i == 0 {
+        (top: 0.7pt + gray.lighten(30%))
+      } else {
+        none
+      }
+      let bar = calc.max(1.5pt, track * v / mx)
+      cells.push(grid.cell(
+        stroke: st,
+        align: horizon,
+        [#if i == 0 { text(size: 11pt, weight: "bold")[#g.at(0)] }],
+      ))
+      cells.push(grid.cell(
+        stroke: st,
+        align: horizon + right,
+        [#text(dir: rtl, size: 10pt)[#s]],
+      ))
+      cells.push(grid.cell(
+        stroke: st,
+        align: horizon,
+        box(
+          width: track,
+          height: 12pt,
+          inset: 0pt,
+          stroke: (left: 0.9pt + black),
+          align(horizon + left, rect(
+            width: bar,
+            height: 12pt,
+            fill: colors.at(calc.rem(i, colors.len())),
+            stroke: none,
+          )),
+        ),
+      ))
+      cells.push(grid.cell(
+        stroke: st,
+        align: horizon + left,
+        [#text(dir: ltr, size: 9.5pt)[#v]],
+      ))
+    }
+  }
+  grid(
+    columns: (1.5cm, 3.5cm, track, 1.7cm),
+    column-gutter: 7pt,
+    row-gutter: 4.5pt,
+    ..cells,
+  )
+}
+
+#let _caption(txt) = text(
+  dir: rtl,
+  size: 10pt,
+  fill: black.lighten(35%),
+  [
+    #v(0.5%)
+    #txt
+  ],
+)
+
 #let figure-4-1 = align(center, [
   #v(2.5%)
-  #text(dir: rtl, cetz.canvas({
-    let data = (
-      ([دقت یافته], 0.379, 0.370, 0.600, 0.455),
-      ([یادآوری], 0.037, 0.147, 0.010, 0.017),
-      ([نرخ هشدار سالم], 0.050, 0.197, 0.007, 0.020),
-    )
-    let colors = (red, blue, green, yellow)
-    chart.barchart(
-      data,
-      x-label: [پیکربندی: A ایستا، B عامل، C ایستا+عامل، D ایستا+ساختار+عامل],
-      y-label: [نسبت],
-      legend-key: 0,
-      legend-entry: 0,
-      bar-width: 12pt,
-      ymin: 0,
-      ymax: 0.7,
-      xtick-labels: ([A], [B], [C], [D]),
-      legend-placement: (top: 1, right: 1),
-      size: (10, 5),
-    )
-  }))
-  #text(
-    dir: rtl,
-    size: 10pt,
-    fill: black.lighten(35%),
-    [
-      #v(0.5%)
-      شکل ۴.۱: مقایسهٔ دقت، یادآوری و نرخ هشدار روی فایل سالم در چهار پیکربندی
-    ],
+  #_legend(([دقت یافته], [یادآوری], [نرخ هشدار سالم]))
+  #v(4pt)
+  #grouped-bars(
+    (
+      ([A: ایستا], (0.355, 0.037, 0.050)),
+      ([B: عامل], (0.370, 0.147, 0.197)),
+      ([C: ایستا+عامل], (0.600, 0.010, 0.007)),
+      ([D: ایستا+ساختار+عامل], (0.455, 0.017, 0.020)),
+    ),
+    ([دقت یافته], [یادآوری], [نرخ هشدار سالم]),
+  )
+  #_caption(
+    [شکل ۴.۱: مقایسهٔ دقت، یادآوری و نرخ هشدار روی فایل سالم در چهار پیکربندی],
   )
   #v(1%)
 ])
 
 #let figure-4-2 = align(center, [
   #v(2.5%)
-  #text(dir: rtl, cetz.canvas({
-    let data = (
-      ([A: ایستا], 11, 18, 289, 285),
-      ([B: عامل], 44, 75, 256, 241),
-      ([C: ایستا+عامل], 3, 2, 297, 298),
-      ([D: ایستا+ساختار+عامل], 5, 6, 295, 294),
-    )
-    let colors = (red, blue, green, yellow)
-    chart.barchart(
-      data,
-      x-label: [پیکربندی],
-      y-label: [تعداد نمونه یا یافته],
-      legend-key: 0,
-      legend-entry: 0,
-      bar-width: 10pt,
-      ymin: 0,
-      ymax: 320,
-      xtick-labels: ([A], [B], [C], [D]),
-      legend-placement: (top: 1, right: 1),
-      size: (10, 5),
-    )
-  }))
   #text(
     dir: rtl,
-    size: 10pt,
-    fill: black.lighten(35%),
+    size: 11pt,
+    weight: "bold",
+    [مثبت‌ها (دانه‌بندی یافته)],
+  )
+  #v(3pt)
+  #_legend(([مثبت درست], [مثبت نادرست]))
+  #v(3pt)
+  #grouped-bars(
+    (
+      ([A: ایستا], (11, 20)),
+      ([B: عامل], (44, 75)),
+      ([C: ایستا+عامل], (3, 2)),
+      ([D: ایستا+ساختار+عامل], (5, 6)),
+    ),
+    ([مثبت درست], [مثبت نادرست]),
+  )
+  #v(7pt)
+  #text(
+    dir: rtl,
+    size: 11pt,
+    weight: "bold",
+    [منفی‌ها (دانه‌بندی یافته و فایل)],
+  )
+  #v(3pt)
+  #_legend(([منفی نادرست (یافته)], [منفی درست (فایل)]))
+  #v(3pt)
+  #grouped-bars(
+    (
+      ([A: ایستا], (289, 285)),
+      ([B: عامل], (256, 241)),
+      ([C: ایستا+عامل], (297, 298)),
+      ([D: ایستا+ساختار+عامل], (295, 294)),
+    ),
+    ([منفی نادرست (یافته)], [منفی درست (فایل)]),
+    colors: (rgb("#c05621"), rgb("#2f855a")),
+  )
+  #_caption(
     [
-      #v(0.5%)
-      شکل ۴.۲: ماتریس سردرگمی چهار پیکربندی در دانه‌بندی فایل و یافته
+      شکل ۴.۲: ماتریس سردرگمی چهار پیکربندی در دانه‌بندی یافته و دانه‌بندی فایل
     ],
   )
   #v(1%)
@@ -429,35 +518,17 @@
 
 #let figure-4-3 = align(center, [
   #v(2.5%)
-  #text(dir: rtl, cetz.canvas({
-    let data = (
-      ([C: بدون ساختار], 5, 13, 13),
-      ([D: با ساختار], 11, 14, 6),
-    )
-    let colors = (green, red, yellow)
-    chart.barchart(
-      data,
-      x-label: [پیکربندی],
-      y-label: [تعداد گروه بازبینی‌شده],
-      legend-key: 0,
-      legend-entry: 0,
-      bar-width: 16pt,
-      ymin: 0,
-      ymax: 20,
-      xtick-labels: ([C], [D]),
-      legend-placement: (top: 1, right: 1),
-      size: (10, 5),
-    )
-  }))
-  #text(
-    dir: rtl,
-    size: 10pt,
-    fill: black.lighten(35%),
-    [
-      #v(0.5%)
-      شکل ۴.۳: اثر شواهد ساختاری بر تصمیم‌های عامل زبانی
-    ],
+  #_legend(([تأییدشده], [ردشده], [نامطمئن]))
+  #v(4pt)
+  #grouped-bars(
+    (
+      ([C: بدون ساختار], (5, 13, 13)),
+      ([D: با ساختار], (11, 14, 6)),
+    ),
+    ([تأییدشده], [ردشده], [نامطمئن]),
+    colors: (rgb("#2f855a"), rgb("#c05621"), rgb("#718096")),
   )
+  #_caption([شکل ۴.۳: اثر شواهد ساختاری بر تصمیم‌های عامل زبانی])
   #v(1%)
 ])
 
