@@ -420,6 +420,18 @@ balanced accuracy, positive/negative support, and per-CWE results.
 explicit benign/negative sample population. Do not report a single FPR from a
 vulnerable-only dataset.
 
+**Granularity.** Precision, recall and F1 are derived from
+`metrics.confusion`, where `FP` counts *findings*. The four benign-side rates
+above — FPR, specificity, accuracy and balanced accuracy — are derived
+instead from `metrics.sample_confusion`, in which every cell counts *files*,
+so their `FP` means "benign files flagged", not "findings on benign files".
+`negative_support` is the number of benign files. Each result file records the
+split as `metadata.metric_granularity`; blending the two matrices inside one
+rate makes the denominator move with the number of findings a run happens to
+emit, which is how the static baseline could otherwise end up with the worst
+balanced accuracy of the four while its finding-level precision told a
+different story.
+
 ### Two matching protocols, reported side by side
 
 Matching runs in two variants, both scored from the same stored reports, so
@@ -475,12 +487,21 @@ from the stored reports of `exp_A_static_subset600.json` and
 `exp_A_static.json` after the original Juliet manifest was lost; the evaluator
 reproduces A, B, C and D from them exactly, including the per-CWE breakdown.
 
-`results/exp_A_static_subset600.json` and `results/exp_A_static.json` carry a
-`metrics_recomputed_at` provenance stamp: their metrics were refreshed with the
-current evaluator after config A's false-positive counting was corrected to
-count every reported finding rather than one per benign file. Configs B, C and
-D are unaffected because each of their benign files carried exactly one
-finding.
+All five of `results/exp_A_static_subset600.json`,
+`results/exp_B_llm_only_eval600.json`,
+`results/exp_C_static_llm_subset600.json`,
+`results/exp_D_static_structural_llm_subset600.json` and
+`results/exp_A_static.json` carry a `metrics_recomputed_at` provenance stamp:
+their metrics were refreshed with the current evaluator. The refresh corrected
+config A's false-positive counting, which now counts every reported finding
+rather than one per benign file. B, C and D were unaffected by that particular
+correction because each of their benign files carried exactly one finding, but
+they were re-scored at the same time so that all four A–D files share one
+`metric_granularity` note, one sample-level confusion matrix and one set of
+per-CWE counters. Config B stores no per-sample reports — it is scored from its
+verdicts alone — so its stamp reads `metrics_recomputed_from:
+metadata.matches + metadata.unmatched_predictions` instead of
+`metadata.reports`.
 
 Re-derive any of them from the stored per-sample reports without re-running
 the analyzers or the model:
@@ -488,6 +509,10 @@ the analyzers or the model:
 ```bash
 python scripts/recompute_result.py results/exp_C_static_llm_subset600.json
 ```
+
+`results/exp_B_llm_only_eval600.json` has no per-sample reports to rebuild
+from; the same command still works on it, reading the prediction set back out
+of its `matches` and `unmatched_predictions`.
 
 ---
 

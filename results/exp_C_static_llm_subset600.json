@@ -17,6 +17,12 @@
     "balanced_accuracy": 0.5016666666666666,
     "positive_support": 300,
     "negative_support": 300,
+    "sample_confusion": {
+      "tp": 3,
+      "fp": 2,
+      "fn": 297,
+      "tn": 298
+    },
     "matched_predictions": 3,
     "unmatched_predictions": 2
   },
@@ -254,7 +260,6 @@
     {
       "sample_id": "CWE122_Heap_Based_Buffer_Overflow__cpp_src_wchar_t_cpy_51b__good",
       "file": "/home/ali/codey-security/datasets/juliet_hf_train/s05/CWE122_Heap_Based_Buffer_Overflow__cpp_src_wchar_t_cpy_51b_good.cpp",
-      "vulnerable": true,
       "cwe": [
         "CWE-120"
       ],
@@ -306,12 +311,14 @@
         "tool_support": [
           "flawfinder"
         ]
-      }
+      },
+      "claims_vulnerable": true,
+      "sample_vulnerable": false,
+      "failure": "reported_on_benign_file"
     },
     {
       "sample_id": "CWE122_Heap_Based_Buffer_Overflow__c_src_wchar_t_cat_54e__good",
       "file": "/home/ali/codey-security/datasets/juliet_hf_train/s10/CWE122_Heap_Based_Buffer_Overflow__c_src_wchar_t_cat_54e_good.c",
-      "vulnerable": true,
       "cwe": [
         "CWE-120"
       ],
@@ -362,7 +369,10 @@
         "tool_support": [
           "flawfinder"
         ]
-      }
+      },
+      "claims_vulnerable": true,
+      "sample_vulnerable": false,
+      "failure": "reported_on_benign_file"
     }
   ],
   "unmatched_ground_truth": [
@@ -5137,6 +5147,12 @@
       "balanced_accuracy": 0.5033333333333333,
       "positive_support": 150,
       "negative_support": 150,
+      "sample_confusion": {
+        "tp": 3,
+        "fp": 2,
+        "fn": 147,
+        "tn": 148
+      },
       "matched_predictions": 3,
       "unmatched_predictions": 2
     },
@@ -5157,6 +5173,12 @@
       "balanced_accuracy": 0.5,
       "positive_support": 150,
       "negative_support": 150,
+      "sample_confusion": {
+        "tp": 0,
+        "fp": 0,
+        "fn": 150,
+        "tn": 150
+      },
       "matched_predictions": 0,
       "unmatched_predictions": 0
     }
@@ -5171,16 +5193,19 @@
       "line_tolerance": 5,
       "require_cwe_when_available": true
     },
-    "metric_granularity": "TP/FP/FN are finding-level; TN/negative support are sample-level.",
+    "metric_granularity": "precision/recall/F1 are finding-level; confusion.tn and every benign-side rate are sample-level.",
     "sample_level": {
       "vulnerable_samples": 300,
       "vulnerable_detected": 3,
       "vulnerable_detection_rate": 0.01,
+      "vulnerable_flagged": 3,
+      "vulnerable_flag_rate": 0.01,
+      "class_mismatch_count": 0,
       "benign_samples": 300,
       "benign_flagged": 2,
       "benign_flag_rate": 0.006666666666666667,
       "unmatched_findings_on_vulnerable": 0,
-      "findings_per_vulnerable_file": 0.016666666666666666
+      "findings_per_vulnerable_file": 0.01
     },
     "reports": [
       {
@@ -59870,8 +59895,9 @@
       },
       "python_version": "3.14.7",
       "finished_at": "2026-09-28T11:34:31+0330",
-      "metrics_recomputed_at": "2026-09-28T08:18:19+00:00",
-      "metrics_recomputed_from": "metadata.reports"
+      "metrics_recomputed_at": "2026-10-04T12:11:22+00:00",
+      "metrics_recomputed_from": "metadata.reports",
+      "matching_variant": "cwe_strict"
     }
   }
 }

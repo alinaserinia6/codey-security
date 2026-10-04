@@ -50,7 +50,17 @@ A benign sample is a real negative example. It is not merely a vulnerable sample
 
 FPR therefore requires a defined benign population:
 
-`FP / (FP + TN)`.
+`FP / (FP + TN)`
+
+with all four cells counted in *files*: `FP` here is "benign files flagged",
+not "findings reported on benign files". Precision, recall and F1 stay at
+finding level (`metrics.confusion`); FPR, specificity, accuracy and balanced
+accuracy come from the separate sample-level matrix
+(`metrics.sample_confusion`), and `negative_support` is the number of benign
+files. Every result file records the split as `metadata.metric_granularity`.
+Blending the two matrices inside one rate makes the denominator move with the
+number of findings a run happens to emit, so never quote a benign-side rate
+whose numerator is finding-level.
 
 ## Recommended experiment protocol
 

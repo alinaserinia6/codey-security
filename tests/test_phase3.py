@@ -1,7 +1,15 @@
+import importlib.util
+import sys
+from pathlib import Path
+
+import pytest
+
 from phase3.evaluator import evaluate
 from phase3.matcher import MatchConfig
 from phase3.models import ConfusionMatrix, GroundTruth, Prediction
 from phase3.metrics import compute_metrics
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_metrics():
@@ -122,3 +130,94 @@ def test_a_matched_prediction_is_not_annotated_as_a_failure():
 
     assert result.to_dict()["unmatched_predictions"] == []
     assert "prediction" in result.to_dict()["matches"][0]
+
+
+def test_per_cwe_carries_the_match_counts_of_its_own_findings():
+    """A per-CWE row reports how many findings it credited and how many it charged.
+
+    ``confusion`` alone does not say how many findings were involved, so
+    ``matched_predictions``/``unmatched_predictions`` are reported alongside
+    it -- the same two counters the aggregate row carries.  Dropping them made
+    the frozen result files disagree with each other about whether a per-CWE
+    block has them at all.
+    """
+    gt = [
+        GroundTruth("v122", "v122.c", True, ["CWE-122"], line=4),
+        GroundTruth("b122", "b122.c", False, ["CWE-122"], line=4),
+        GroundTruth("v190", "v190.c", True, ["CWE-190"], line=4),
+    ]
+    pred = [
+        Prediction("v122", "v122.c", True, ["CWE-122"], line=4),
+        Prediction("b122", "b122.c", True, ["CWE-122"], line=4),
+        Prediction("v190", "v190.c", True, ["CWE-190"], line=4),
+    ]
+    per_cwe = evaluate("test", pred, gt).per_cwe
+
+    cwe122 = per_cwe["CWE-122"]
+    assert cwe122.matched_predictions == 1
+    assert cwe122.unmatched_predictions == 1  # the finding on the clean file
+    assert cwe122.sample_confusion.tp == 1 and cwe122.sample_confusion.fp == 1
+
+    cwe190 = per_cwe["CWE-190"]
+    assert cwe190.matched_predictions == 1
+    assert cwe190.unmatched_predictions == 0
+
+
+def _recompute_module():
+    spec = importlib.util.spec_from_file_location(
+        "recompute_result", ROOT / "scripts" / "recompute_result.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["recompute_result"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_stored_findings_read_back_into_predictions():
+    """A run that stores no reports is re-scored from the finding set it has.
+
+    The LLM-only leg keeps only its verdicts, so refreshing its metrics means
+    reading every prediction back out of ``matches`` + ``unmatched_predictions``
+    and re-running the matcher.  Unmatched entries come in two shapes -- the
+    run's assertion was later renamed ``vulnerable`` ->
+    ``claims_vulnerable`` -- and both must read back to the same
+    ``Prediction``.
+    """
+    module = _recompute_module()
+
+    matched = Prediction("v", "v.c", True, ["CWE-120"], line=4).to_dict()
+    current = Prediction("b1", "b1.c", True, ["CWE-120"], line=4).to_dict()
+    current["claims_vulnerable"] = current.pop("vulnerable")
+    current["sample_vulnerable"] = False
+    current["failure"] = "reported_on_benign_file"
+    legacy = Prediction("b2", "b2.c", True, ["CWE-120"], line=4).to_dict()
+
+    payload = {
+        "matches": [{"prediction": matched}],
+        "unmatched_predictions": [current, legacy],
+        "metadata": {"positive_prediction_count": 3},
+    }
+    rebuilt = module._predictions_from_result(payload)
+
+    # Returned in a canonical order: greedy_match breaks score ties by
+    # prediction index, so rebuilding from matches + unmatched_predictions
+    # would otherwise shuffle the stored matches on every pass.
+    assert [(p.sample_id, p.vulnerable, p.line) for p in rebuilt] == [
+        ("b1", True, 4),
+        ("b2", True, 4),
+        ("v", True, 4),
+    ]
+
+
+def test_partial_finding_set_is_refused():
+    """Re-scoring a truncated finding set would yield a plausible wrong table."""
+    module = _recompute_module()
+    matched = Prediction("v", "v.c", True, ["CWE-120"], line=4).to_dict()
+    payload = {
+        "matches": [{"prediction": matched}],
+        "unmatched_predictions": [],
+        "metadata": {"positive_prediction_count": 3},
+    }
+
+    with pytest.raises(ValueError, match="incomplete"):
+        module._predictions_from_result(payload)

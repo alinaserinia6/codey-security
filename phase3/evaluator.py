@@ -122,6 +122,8 @@ def _per_cwe(preds: list[Prediction], gts: list[GroundTruth], cfg: MatchConfig) 
         out[cwe]=compute_metrics(
             ConfusionMatrix(len(m),fp,len(ug),tn),
             sample_cm=sample_confusion(m,pg,benign,predicted_benign),
+            matched_predictions=len(m),
+            unmatched_predictions=fp,
             negative_support=len(benign),
         )
     return out

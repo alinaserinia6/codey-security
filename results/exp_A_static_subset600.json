@@ -6411,8 +6411,8 @@
         "fn": 139,
         "tn": 141
       },
-      "matched_predictions": 0,
-      "unmatched_predictions": 0
+      "matched_predictions": 11,
+      "unmatched_predictions": 11
     },
     "CWE-190": {
       "confusion": {
@@ -6438,7 +6438,7 @@
         "tn": 146
       },
       "matched_predictions": 0,
-      "unmatched_predictions": 0
+      "unmatched_predictions": 4
     }
   },
   "metadata": {
@@ -49707,7 +49707,7 @@
       },
       "python_version": "3.14.7",
       "finished_at": "2026-09-28T11:19:56+0330",
-      "metrics_recomputed_at": "2026-10-04T08:53:09+00:00",
+      "metrics_recomputed_at": "2026-10-04T12:11:22+00:00",
       "metrics_recomputed_from": "metadata.reports",
       "matching_variant": "cwe_strict"
     }

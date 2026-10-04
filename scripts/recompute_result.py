@@ -10,6 +10,12 @@ them against the dataset named in the provenance block, and writes the
 refreshed result back.  Provenance is preserved and annotated so a reader can
 tell that the numbers were recomputed rather than freshly measured.
 
+A run scored straight from the model's verdicts (the LLM-only leg) writes no
+reports, so there is nothing to rebuild from.  For those files the script falls
+back to the finding set already stored in the result -- every prediction is
+either in ``matches`` or in ``unmatched_predictions`` -- and re-scores that.
+No model call is made either way.
+
 Usage:
     python scripts/recompute_result.py results/exp_C_static_llm_subset600.json
     python scripts/recompute_result.py --dataset datasets/vulnllm_r_c.json results/*.json
@@ -41,6 +47,7 @@ from phase3.extract_predictions import (  # noqa: E402
     predictions_from_phase2,
 )
 from phase3.matcher import MatchConfig  # noqa: E402
+from phase3.models import Prediction  # noqa: E402
 
 
 def _phase1_of(entry: dict) -> dict:
@@ -64,6 +71,80 @@ def _rebuild_predictions(entry: dict, sample_id: str) -> list:
     return predictions_from_phase1(_phase1_of(entry), sample_id)
 
 
+def _unmatched_to_prediction(entry: dict) -> Prediction:
+    """Read one stored unmatched finding back as a ``Prediction``.
+
+    ``EvaluationResult.to_dict`` annotates unmatched findings on the way out:
+    the run's assertion is renamed ``vulnerable`` -> ``claims_vulnerable`` and
+    the sample's own label is written next to it.  Both generations of that
+    shape are accepted here so a file written before the rename can still be
+    re-scored.
+    """
+    data = dict(entry)
+    if "vulnerable" not in data:
+        if "claims_vulnerable" not in data:
+            raise ValueError(
+                "stored unmatched prediction carries neither 'vulnerable' nor "
+                f"'claims_vulnerable'; keys were {sorted(data)}"
+            )
+        data["vulnerable"] = data.pop("claims_vulnerable")
+        data.pop("sample_vulnerable", None)
+        data.pop("failure", None)
+    return Prediction(**data)
+
+
+def _order_key(pred: Prediction) -> tuple:
+    """Canonical order for a rebuilt prediction set.
+
+    ``greedy_match`` breaks score ties by prediction index, so the order the
+    predictions are handed to it leaks into the order of the ``matches`` list
+    it returns -- rebuilding them from ``matches`` + ``unmatched_predictions``
+    would otherwise shuffle that list on every pass.  Sorting fixes the order
+    so re-scoring the same file twice writes the same bytes.  The score set,
+    and therefore every metric, is unaffected.
+    """
+    return (
+        pred.sample_id,
+        pred.line if pred.line is not None else -1,
+        ",".join(sorted(pred.cwe)),
+        pred.source,
+        pred.finding_id or "",
+    )
+
+
+def _predictions_from_result(payload: dict) -> list:
+    """Rebuild the prediction list of a run that stores no reports.
+
+    The LLM-only leg is scored straight from the model's verdicts, so no
+    per-sample Phase-1/Phase-2 block is written and ``metadata.reports`` is
+    absent.  Every prediction such a run produced is already in the file
+    itself -- it is either credited in ``matches`` or left in
+    ``unmatched_predictions`` -- so the finding set can be read back and
+    re-scored without re-running a single model call.
+
+    The two lists partition the predictions, so their lengths are checked
+    against ``metadata.positive_prediction_count``: re-scoring a partial set
+    would produce a plausible-looking but wrong table.
+    """
+    preds: list[Prediction] = []
+    for match in payload.get("matches") or []:
+        preds.append(Prediction(**match["prediction"]))
+    for entry in payload.get("unmatched_predictions") or []:
+        preds.append(_unmatched_to_prediction(entry))
+    preds.sort(key=_order_key)
+
+    expected = ((payload.get("metadata", {}) or {})
+                .get("positive_prediction_count"))
+    if expected is not None:
+        found = len([p for p in preds if p.vulnerable])
+        if found != expected:
+            raise ValueError(
+                f"rebuilt {found} predictions but the result records "
+                f"{expected}; the stored finding set is incomplete"
+            )
+    return preds
+
+
 def recompute(path: Path, dataset_path: Path | None,
               require_cwe: bool | None = None) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -81,14 +162,21 @@ def recompute(path: Path, dataset_path: Path | None,
 
     dataset = GroundTruthDataset.from_json(str(ds_path))
     reports = (payload.get("metadata", {}) or {}).get("reports", [])
-    if not reports:
-        raise ValueError(f"{path}: no metadata.reports to recompute from")
-
     predictions: list = []
-    for entry in reports:
-        predictions.extend(
-            _rebuild_predictions(entry, entry.get("sample_id", ""))  # type: ignore[arg-type]
-        )
+    if reports:
+        for entry in reports:
+            predictions.extend(
+                _rebuild_predictions(entry, entry.get("sample_id", ""))  # type: ignore[arg-type]
+            )
+        rebuilt_from = "metadata.reports"
+    else:
+        predictions = _predictions_from_result(payload)
+        if not predictions:
+            raise ValueError(
+                f"{path}: no metadata.reports and no stored findings to "
+                "recompute from"
+            )
+        rebuilt_from = "metadata.matches + metadata.unmatched_predictions"
 
     strict = (bool(provenance.get("require_cwe_match", True))
               if require_cwe is None else require_cwe)
@@ -104,12 +192,13 @@ def recompute(path: Path, dataset_path: Path | None,
     )
 
     refreshed = result.to_dict()
-    refreshed["metadata"]["reports"] = reports
+    if reports:
+        refreshed["metadata"]["reports"] = reports
     prov = dict((payload.get("metadata", {}) or {}).get("provenance", {}) or {})
     prov["metrics_recomputed_at"] = datetime.now(timezone.utc).isoformat(
         timespec="seconds"
     )
-    prov["metrics_recomputed_from"] = "metadata.reports"
+    prov["metrics_recomputed_from"] = rebuilt_from
     prov["dataset"] = str(ds_path)
     # Make the variant legible in the file itself: a strict table and an
     # agnostic table must never be mistaken for each other downstream.

@@ -49,9 +49,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-import env_config  # noqa: E402,F401 -- loads .env into os.environ (no override
-# of already-exported vars) so every child benchmark process inherits the
-# same configuration as `python codey_security.py`.
+from env_config import get_config  # noqa: E402 -- importing loads .env into
+# os.environ (no override of already-exported vars) so every child benchmark
+# process inherits the same configuration as `python codey_security.py`.
 
 from agents.openai_compat import resolve_transport  # noqa: E402
 
@@ -155,7 +155,8 @@ def llm_reachable(timeout: int = 8) -> tuple:
     (Apmix, OpenRouter, ...) exposes ``/models`` and needs the API key. Probing
     the wrong one reports "unreachable" and silently skips every LLM leg.
     """
-    base = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:4096").rstrip("/")
+    cfg = get_config()
+    base = cfg.llm_base_url
     transport = resolve_transport(base)
     try:
         if transport == "openai":
@@ -165,7 +166,7 @@ def llm_reachable(timeout: int = 8) -> tuple:
                 request.add_header("Authorization", f"Bearer {key}")
             with urllib.request.urlopen(request, timeout=timeout) as resp:
                 body = resp.read().decode("utf-8", "replace")
-            model = os.environ.get("LLM_MODEL_ID") or os.environ.get("LLM_MODEL", "")
+            model = cfg.llm_model_id
             listed = False
             try:
                 ids = {
