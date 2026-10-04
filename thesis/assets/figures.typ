@@ -611,9 +611,9 @@
   #text(
     dir: rtl,
     diagram(
-      spacing: (0.3cm, 0.7cm),
+      spacing: (0.27cm, 0.7cm),
 
-      node((0, 0), rect(width: 74pt, height: 56pt, [
+      node((0, 0), rect(width: 76pt, height: 56pt, [
         #text(size: 8pt)[چالش ۱]
         \
         #text(size: 9.5pt, weight: "bold")[پایداریِ پاسخ]
@@ -622,7 +622,7 @@
         #v(4%)
       ])),
 
-      node((1, 0), rect(width: 74pt, height: 56pt, [
+      node((1, 0), rect(width: 76pt, height: 56pt, [
         #text(size: 8pt)[چالش ۲]
         \
         #text(size: 9.5pt, weight: "bold")[هزینهٔ محاسباتی]
@@ -631,7 +631,7 @@
         #v(4%)
       ])),
 
-      node((2, 0), rect(width: 74pt, height: 56pt, [
+      node((2, 0), rect(width: 76pt, height: 56pt, [
         #text(size: 8pt)[چالش ۳]
         \
         #text(size: 9.5pt, weight: "bold")[نشتِ برچسب]
@@ -640,7 +640,7 @@
         #v(4%)
       ])),
 
-      node((3, 0), rect(width: 74pt, height: 56pt, [
+      node((3, 0), rect(width: 76pt, height: 56pt, [
         #text(size: 8pt)[چالش ۴]
         \
         #text(size: 9.5pt, weight: "bold")[شفافیتِ پیکربندی]
@@ -649,12 +649,12 @@
         #v(4%)
       ])),
 
-      node((4, 0), rect(width: 74pt, height: 56pt, [
+      node((4, 0), rect(width: 76pt, height: 56pt, [
         #text(size: 8pt)[چالش ۵]
         \
         #text(size: 9.5pt, weight: "bold")[پایداریِ سرویس]
         \
-        #text(size: 8pt)[خطای شبکه، یادآوریِ کاذب]
+        #text(size: 7pt)[خطای شبکه، یادآوریِ کاذب]
         #v(4%)
       ])),
     ),
