@@ -14,7 +14,7 @@ applies the evidence gates that the prompt alone cannot enforce.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from phase2.prompts import VERIFIER_PROMPT
 
@@ -25,27 +25,6 @@ class VerifierAgent(SecurityAgent):
     """A :class:`SecurityAgent` bound to the Verifier role prompt."""
 
     system_prompt = VERIFIER_PROMPT
-
-    def __init__(
-        self,
-        *,
-        base_url: Optional[str] = None,
-        model_id: Optional[str] = None,
-        provider_id: Optional[str] = None,
-        mode: Optional[str] = None,
-        timeout: Optional[float] = None,
-        reuse_session: Optional[bool] = None,
-        system_prompt: Optional[str] = None,
-    ):
-        super().__init__(
-            base_url=base_url,
-            model_id=model_id,
-            provider_id=provider_id,
-            mode=mode,
-            timeout=timeout,
-            reuse_session=reuse_session,
-        )
-        self.system_prompt = system_prompt or self.system_prompt
 
     async def verify(self, evidence_packet: Dict[str, Any]) -> Dict[str, Any]:
         """Return a verdict for one hypothesis."""

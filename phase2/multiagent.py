@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tup
 
 from analyzers.catalog import VulnerabilityCatalog, get_catalog
 from analyzers.cwe_family import cwes_match
+from analyzers.normalize import clamp_confidence
 from analyzers.taint import taint_chains_for, taint_modelled
 
 from agents import thinking_log
@@ -1151,7 +1152,7 @@ class MultiAgentPipeline:
             )
         return Verification(
             decision=decision,
-            confidence=max(0.0, min(1.0, confidence)),
+            confidence=clamp_confidence(confidence),
             cwe=cwe_list,
             severity=str(raw.get("severity", "UNKNOWN")).upper(),
             explanation=explanation,

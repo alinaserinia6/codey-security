@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from analyzers.normalize import clamp_confidence, safe_cwe_list
+
 from .models import Prediction
 
 CONFIRMED = "CONFIRMED"
@@ -24,24 +26,6 @@ def _safe_line(value) -> "int | None":
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
-
-
-def _safe_confidence(value) -> float:
-    try:
-        return max(0.0, min(1.0, float(value or 0.0)))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _safe_cwe_list(value) -> List[str]:
-    if not value:
-        return []
-    if isinstance(value, str):
-        return [value]
-    try:
-        return [str(c) for c in value if c]
-    except TypeError:
-        return [str(value)]
 
 
 def _source_of(report: Dict[str, Any]) -> str:
@@ -67,10 +51,10 @@ def predictions_from_phase1(
                 sample_id=sample_id,
                 file=str(finding.get("file") or source),
                 vulnerable=True,
-                cwe=_safe_cwe_list(finding.get("cwe", [])),
+                cwe=safe_cwe_list(finding.get("cwe", [])),
                 line=_safe_line(line),
                 status=CONFIRMED,
-                confidence=_safe_confidence(finding.get("confidence")),
+                confidence=clamp_confidence(finding.get("confidence")),
                 source=str(finding.get("tool") or "phase1"),
                 fingerprint=finding.get("fingerprint"),
                 raw=finding,
@@ -101,10 +85,10 @@ def predictions_from_phase2(
                 sample_id=sample_id,
                 file=str(decision.get("file") or source),
                 vulnerable=True,
-                cwe=_safe_cwe_list(decision.get("cwe", [])),
+                cwe=safe_cwe_list(decision.get("cwe", [])),
                 line=_safe_line(line),
                 status=CONFIRMED,
-                confidence=_safe_confidence(decision.get("confidence")),
+                confidence=clamp_confidence(decision.get("confidence")),
                 source="phase2",
                 raw=decision,
             )

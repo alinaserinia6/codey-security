@@ -11,7 +11,7 @@ The reply is returned unnormalised: this role's output contract is a
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from phase2.prompts import SCANNER_PROMPT
 
@@ -22,29 +22,6 @@ class ScannerAgent(SecurityAgent):
     """A :class:`SecurityAgent` bound to the Scanner role prompt."""
 
     system_prompt = SCANNER_PROMPT
-
-    def __init__(
-        self,
-        *,
-        base_url: Optional[str] = None,
-        model_id: Optional[str] = None,
-        provider_id: Optional[str] = None,
-        mode: Optional[str] = None,
-        timeout: Optional[float] = None,
-        reuse_session: Optional[bool] = None,
-        system_prompt: Optional[str] = None,
-    ):
-        super().__init__(
-            base_url=base_url,
-            model_id=model_id,
-            provider_id=provider_id,
-            mode=mode,
-            timeout=timeout,
-            reuse_session=reuse_session,
-        )
-        # An explicit prompt still wins, which is what the ablation in
-        # ``MultiAgentConfig`` needs.
-        self.system_prompt = system_prompt or self.system_prompt
 
     async def scan(self, evidence_packet: Dict[str, Any]) -> Dict[str, Any]:
         """Propose hypotheses for one file."""

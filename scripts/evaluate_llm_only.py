@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from phase3.dataset import GroundTruthDataset  # noqa: E402
 from phase3.evaluator import evaluate  # noqa: E402
 from phase3.matcher import MatchConfig  # noqa: E402
+from analyzers.normalize import safe_cwe_list  # noqa: E402
 from phase3.models import Prediction  # noqa: E402
 from phase3.report import save_result  # noqa: E402
 
@@ -98,17 +99,6 @@ def _safe_float(value) -> float:
         return 0.0
 
 
-def _safe_cwe_list(value) -> list:
-    if not value:
-        return []
-    if isinstance(value, str):
-        return [value]
-    try:
-        return [str(c) for c in value if c]
-    except TypeError:
-        return [str(value)]
-
-
 def build_predictions(records: List[dict], experiment: str) -> List[Prediction]:
     predictions: List[Prediction] = []
     for record in records:
@@ -119,7 +109,7 @@ def build_predictions(records: List[dict], experiment: str) -> List[Prediction]:
                 sample_id=str(record["sample_id"]),
                 file=str(record.get("file") or ""),
                 vulnerable=True,
-                cwe=_safe_cwe_list(record.get("cwe")),
+                cwe=safe_cwe_list(record.get("cwe")),
                 line=_safe_int(record.get("line")),
                 status="CONFIRMED",
                 confidence=_safe_float(record.get("confidence")),

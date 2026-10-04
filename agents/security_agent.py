@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 from opencode_ai import Opencode
 from opencode_ai.types import TextPartInputParam
 
+from analyzers.normalize import clamp_confidence
+
 from . import thinking_log
 from .openai_compat import OpenAICompat, TruncatedResponse, resolve_transport
 
@@ -197,6 +199,11 @@ def _repair_json(text: str) -> str:
 class SecurityAgent:
     """Single Security Agent backed by an external LLM server."""
 
+    # Role subclasses bind their prompt here; an instance built with an
+    # explicit ``system_prompt`` shadows it (the multi-agent ablation needs
+    # that override without a separate subclass per variant).
+    system_prompt: Optional[str] = None
+
     def __init__(
         self,
         *,
@@ -206,6 +213,7 @@ class SecurityAgent:
         mode: Optional[str] = None,
         timeout: Optional[float] = None,
         reuse_session: Optional[bool] = None,
+        system_prompt: Optional[str] = None,
     ) -> None:
         self.base_url = (
             base_url
@@ -265,6 +273,8 @@ class SecurityAgent:
             self.client = Opencode(base_url=self.base_url, timeout=self.timeout)
         self._session_id: Optional[str] = None
         self._session_lock = asyncio.Lock()
+        if system_prompt:
+            self.system_prompt = system_prompt
 
     def _context(self) -> str:
         return (
@@ -819,8 +829,7 @@ class SecurityAgent:
         if decision not in {"CONFIRMED", "REJECTED", "UNCERTAIN"}:
             decision = "UNCERTAIN"
 
-        confidence = _safe_float(value.get("confidence"), 0.0)
-        confidence = max(0.0, min(1.0, confidence))
+        confidence = clamp_confidence(value.get("confidence"))
 
         def string_list(item: Any) -> List[str]:
             if item is None:

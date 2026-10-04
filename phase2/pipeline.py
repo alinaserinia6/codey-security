@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from agents import thinking_log
+from analyzers.normalize import clamp_confidence
 
 from .context import load_source_context
 from .llm import Phase2LLM
@@ -173,14 +174,10 @@ class Phase2Pipeline:
         decision = str(value.get("decision", "UNCERTAIN")).upper()
         if decision not in {"CONFIRMED", "REJECTED", "UNCERTAIN"}:
             decision = "UNCERTAIN"
-        try:
-            confidence = float(value.get("confidence", 0.0))
-        except (TypeError, ValueError):
-            confidence = 0.0
         return AgentAssessment(
             agent="security",
             decision=decision,
-            confidence=max(0.0, min(1.0, confidence)),
+            confidence=clamp_confidence(value.get("confidence", 0.0)),
             rationale=str(value.get("rationale", "")),
             evidence=Phase2Pipeline._string_list(value.get("evidence")),
             missing_evidence=Phase2Pipeline._string_list(

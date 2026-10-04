@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from agents.security_agent import SecurityAgent  # noqa: E402
+from analyzers.normalize import clamp_confidence, safe_cwe_list  # noqa: E402
 from agents import thinking_log  # noqa: E402
 from env_config import get_config  # noqa: E402  (loads .env, like every other entry point)
 from phase2.sanitize import sanitize_source  # noqa: E402
@@ -123,21 +124,6 @@ def _line_from_location(location) -> "int | None":
     return value if value > 0 else None
 
 
-def _safe_confidence(value) -> float:
-    try:
-        return max(0.0, min(1.0, float(value or 0.0)))
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _safe_cwe_list(value) -> list:
-    if not value:
-        return []
-    if isinstance(value, list):
-        return [str(c) for c in value if c]
-    return [str(value)]
-
-
 async def _judge(agent: SecurityAgent, sem: asyncio.Semaphore, sample: dict) -> dict:
     path = Path(sample["file"])
     record = {
@@ -197,9 +183,9 @@ async def _judge(agent: SecurityAgent, sem: asyncio.Semaphore, sample: dict) -> 
             record["decision"] = str(value.get("decision", "UNCERTAIN")).upper()
             if record["decision"] not in {"CONFIRMED", "REJECTED", "UNCERTAIN"}:
                 record["decision"] = "UNCERTAIN"
-            record["cwe"] = _safe_cwe_list(value.get("cwe"))
+            record["cwe"] = safe_cwe_list(value.get("cwe"))
             record["line"] = _line_from_location(value.get("source_location"))
-            record["confidence"] = _safe_confidence(value.get("confidence"))
+            record["confidence"] = clamp_confidence(value.get("confidence"))
             record["severity"] = str(value.get("severity") or "UNKNOWN").upper()
             record["rationale"] = str(value.get("rationale") or "")
         except Exception as exc:  # noqa: BLE001
