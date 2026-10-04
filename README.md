@@ -7,8 +7,8 @@ reasoning and empirical evaluation. The project is organized into three
 completed development phases:
 
 1. **Phase 1 — Structural + Static Analysis**: parse source code with
-   Tree-sitter and normalize findings from Bandit, Cppcheck, Flawfinder, and
-   Clang Static Analyzer. A source-to-sink taint tracker runs over the same
+   Tree-sitter and normalize findings from Bandit, Cppcheck, and Flawfinder.
+   A source-to-sink taint tracker runs over the same
    structural index and recovers concrete dataflow chains.
 2. **Phase 2 — Multi-Agent Evidence-Aware Verification**: a **Scanner Agent**
    reads the file and proposes candidate vulnerabilities, then a **Verifier
@@ -59,11 +59,6 @@ instead of only reporting qualitative examples.
               ▼                  ▼                  ▼
           Bandit             Cppcheck          Flawfinder
           Python             C / C++            C / C++
-                                 │
-                                 ▼
-                       Clang Static Analyzer
-                                 │
-                                 ▼
                     ┌────────────────────────┐
                     │ Finding normalization   │
                     │ + deduplication         │
@@ -128,7 +123,7 @@ codey-security/
 │   ├── structural_analyzer.py      # Tree-sitter AST/structure extraction
 │   ├── taint.py                    # source-to-sink chain recovery
 │   ├── catalog.py                  # CWE/CVE reference data
-│   ├── static_tools.py             # Bandit/Cppcheck/Flawfinder/Clang adapters
+│   ├── static_tools.py             # Bandit/Cppcheck/Flawfinder adapters
 │   └── phase1_pipeline.py          # unified Phase 1 pipeline
 │
 ├── data/
@@ -190,12 +185,14 @@ codey-security/
 | Language | Structural analysis | Security/static baseline |
 |---|---|---|
 | Python | Tree-sitter | Bandit |
-| C | Tree-sitter | Cppcheck, Flawfinder, Clang Static Analyzer |
-| C++ | Tree-sitter | Cppcheck, Flawfinder, Clang Static Analyzer |
+| C | Tree-sitter | Cppcheck, Flawfinder |
+| C++ | Tree-sitter | Cppcheck, Flawfinder |
 
-Clang integration is intentionally conservative in standalone-file mode. For
-real repositories with build systems, Phase 1 should consume
-`compile_commands.json` or the project's actual build command.
+Clang Static Analyzer was evaluated during Phase 1 but is not integrated: in
+standalone-file mode it needs a build context, so its results would not be
+comparable with the pattern-based tools. For real repositories with build
+systems a future Phase 1 could consume `compile_commands.json`, but no Clang
+adapter exists in this codebase.
 
 ---
 
@@ -207,7 +204,7 @@ Ubuntu/Debian example:
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv cppcheck flawfinder clang clang-tools
+sudo apt install -y python3 python3-venv cppcheck flawfinder
 ```
 
 Verify:
@@ -215,8 +212,6 @@ Verify:
 ```bash
 cppcheck --version
 flawfinder --version
-scan-build --version
-clang --version
 ```
 
 ### 2. Python environment
@@ -454,6 +449,46 @@ Every protocol choice applies to **all** legs (A–E) of a comparison; never
 mix variants across rows of one table, and never select a variant after
 looking at the test set without saying so in the write-up.
 
+### Shipped results
+
+Every other run in `results/` is local scratch and stays out of git. These
+files are version controlled because they are the evidence behind the thesis
+tables:
+
+| file | what it is |
+|---|---|
+| `results/exp_A_static_subset600.json` | Phase 1 on the 600-sample Juliet subset (table 4.2, row A) |
+| `results/exp_B_llm_only_eval600.json` | LLM only, no static evidence (table 4.2, row B) |
+| `results/exp_C_static_llm_subset600.json` | static findings + LLM (table 4.2, row C) |
+| `results/exp_D_static_structural_llm_subset600.json` | static + structural evidence + LLM (table 4.2, row D) |
+| `results/exp_A_static.json` | Phase 1 on all 4098 Juliet files (section 4.8) |
+| `results/exp_E_taint_evidence.json` | taint evidence on the Juliet subset (table 4.6) |
+| `results/exp_F_python_bench.json` | taint evidence on the Python benchmark (table 4.5) |
+| `results/exp_G_devign_taint_full.json` | taint evidence on every Devign function (table 4.6) |
+| `results/exp_G_devign_taint_strat600.json` | taint evidence + Flawfinder on a balanced Devign 600 (table 4.6) |
+| `results/comparison_all.csv` | the aggregated A/B/C/D comparison |
+| `datasets/eval_subset_600.json` | the 600-sample population A–E were scored against |
+| `datasets/juliet_test.json` | the full 4098-file Juliet population (section 4.8) |
+
+`datasets/eval_subset_600.json` and `datasets/juliet_test.json` were rebuilt
+from the stored reports of `exp_A_static_subset600.json` and
+`exp_A_static.json` after the original Juliet manifest was lost; the evaluator
+reproduces A, B, C and D from them exactly, including the per-CWE breakdown.
+
+`results/exp_A_static_subset600.json` and `results/exp_A_static.json` carry a
+`metrics_recomputed_at` provenance stamp: their metrics were refreshed with the
+current evaluator after config A's false-positive counting was corrected to
+count every reported finding rather than one per benign file. Configs B, C and
+D are unaffected because each of their benign files carried exactly one
+finding.
+
+Re-derive any of them from the stored per-sample reports without re-running
+the analyzers or the model:
+
+```bash
+python scripts/recompute_result.py results/exp_C_static_llm_subset600.json
+```
+
 ---
 
 ## Recommended research experiments
@@ -616,7 +651,8 @@ For research runs:
 
 ## Current limitations
 
-- Phase 1 standalone Clang analysis is not yet build-system aware.
+- Clang Static Analyzer is not integrated into Phase 1 (it needs
+  `compile_commands.json` to be comparable with the pattern-based tools).
 - The principal manifests (VulnLLM-R, PrimeVul, Big-Vul) carry weak labels
   inherited from their source corpora (patched-commit and function-level
   heuristics), so a manually audited validation subset is still required before
@@ -627,8 +663,8 @@ For research runs:
   propagation and C parameter/global origins, but not inter-procedural flows, so
   a bug whose source and sink are in different functions is out of its reach.
 - Taint recall is low by construction on overflow-style bugs. On the historical
-  600-sample Juliet subset (kept in `~/.cache/results/exp_E_taint_evidence.json`,
-  no longer shipped) counting any source-to-sink path gave TP 26 / FP 33 over
+  600-sample Juliet subset (shipped as `results/exp_E_taint_evidence.json`)
+  counting any source-to-sink path gave TP 26 / FP 33 over
   600 samples (recall `0.087`, benign flag rate `0.110`); counting only
   unmitigated paths, TP 7 / FP 7 (recall `0.023`, benign flag rate `0.023`).
   Low recall is expected, because the CWE-122 and CWE-190 test cases are size-
@@ -708,7 +744,6 @@ markers survived, so the corpus is usable for the LLM phases as well.
 - [x] Bandit integration
 - [x] Cppcheck integration
 - [x] Flawfinder integration
-- [x] Clang Static Analyzer integration
 - [x] Normalized finding schema
 - [x] Deduplication and function-scope correlation
 - [x] Evidence-aware Security Agent over LLM (single-agent baseline)
