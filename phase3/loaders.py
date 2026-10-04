@@ -416,12 +416,18 @@ def _select_balanced(
         vuln, benign = vuln[:keep], benign[:keep]
     samples = vuln + benign
     if options.limit and len(samples) > options.limit:
-        # Stratify the cap so a limit does not silently drop the minority class.
-        import math
+        if options.balanced and vuln and benign:
+            import math
 
-        per_class = max(1, math.ceil(options.limit / 2))
-        samples = vuln[:per_class] + benign[:per_class]
-        samples = samples[: options.limit]
+            # Stratify the cap so a limit does not silently drop the minority class.
+            per_class = max(1, math.ceil(options.limit / 2))
+            samples = vuln[:per_class] + benign[:per_class]
+            samples = samples[: options.limit]
+        else:
+            # Unbalanced: keep the natural class mix and just honour the cap.
+            # Splitting the limit evenly here would underfill whenever one
+            # class is smaller than limit / 2.
+            samples = samples[: options.limit]
     rng.shuffle(samples)
     return samples
 
@@ -997,10 +1003,16 @@ def load_vulnllm_r(
         seen.add(source)
 
         raw_cwe = record.get("CWE_ID")
-        try:
-            cwe_values = [str(x) for x in list(raw_cwe)]
-        except TypeError:
-            cwe_values = [str(raw_cwe)] if raw_cwe else []
+        if isinstance(raw_cwe, str):
+            # A bare string must stay whole: _cwes_from_record splits it on
+            # separators. Iterating it here would explode "CWE-89" into
+            # single characters.
+            cwe_values: Any = raw_cwe
+        else:
+            try:
+                cwe_values = list(raw_cwe)
+            except TypeError:
+                cwe_values = raw_cwe
         cwes = _cwes_from_record({"cwe": cwe_values}, "cwe")
         target = record.get("target")
         vulnerable = str(target).strip().lower() in ("1", "true")

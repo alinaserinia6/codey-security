@@ -127,7 +127,11 @@ class VulnerabilityCatalog:
             "name": entry.name,
             "family": entry.family,
             "summary": entry.summary,
-            "related_cves": [self._cves[c].to_dict() for c in entry.cves if c in self._cves],
+            "related_cves": [
+                self._cves[c].to_dict()
+                for c in entry.cves
+                if c in self._cves and self._cves[c].in_scope
+            ],
         }
 
     def report_fields(self, cwe_id: str) -> Dict[str, List[str]]:

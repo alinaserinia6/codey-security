@@ -87,10 +87,22 @@ class Phase1Pipeline:
         report.metadata["tool_status"] = self._tool_status(language)
         return report.to_dict()
 
-    def analyze_path(self, path: str | Path) -> Dict[str, Any]:
+    def analyze_path(
+        self,
+        path: str | Path,
+        *,
+        run_bandit: bool = True,
+        run_cppcheck: bool = True,
+        run_flawfinder: bool = True,
+    ) -> Dict[str, Any]:
         path_obj = Path(path).resolve()
+        flags = {
+            "run_bandit": run_bandit,
+            "run_cppcheck": run_cppcheck,
+            "run_flawfinder": run_flawfinder,
+        }
         if path_obj.is_file():
-            return self.analyze_file(path_obj)
+            return self.analyze_file(path_obj, **flags)
 
         reports: List[Dict[str, Any]] = []
         scan_errors: List[Dict[str, Any]] = []
@@ -101,7 +113,7 @@ class Phase1Pipeline:
                 )
                 continue
             try:
-                reports.append(self.analyze_file(item["path"]))
+                reports.append(self.analyze_file(item["path"], **flags))
             except Exception as exc:  # noqa: BLE001 - one bad file must not stop a directory scan
                 scan_errors.append(
                     {"path": item.get("path"), "error": f"{type(exc).__name__}: {exc}"}
@@ -156,7 +168,12 @@ def main() -> None:
             run_flawfinder=not args.no_flawfinder,
         )
     else:
-        result = pipeline.analyze_path(args.path)
+        result = pipeline.analyze_path(
+            args.path,
+            run_bandit=not args.no_bandit,
+            run_cppcheck=not args.no_cppcheck,
+            run_flawfinder=not args.no_flawfinder,
+        )
 
     rendered = json.dumps(result, indent=2, ensure_ascii=False)
     if args.out:

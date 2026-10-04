@@ -55,6 +55,7 @@ def build(args: argparse.Namespace):
             assume_vulnerable=args.assume_vulnerable,
         )
         payload = load_sard(args.root, options, max_samples=args.limit)
+        return payload
     elif args.corpus in ("devign", "big-vul"):
         if not args.input:
             raise LoaderError(f"--input is required for {args.corpus}")

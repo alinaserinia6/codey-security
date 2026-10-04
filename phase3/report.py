@@ -9,7 +9,9 @@ from .models import EvaluationResult
 
 
 def save_result(result: EvaluationResult, path: str | Path) -> None:
-    Path(path).write_text(
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
         json.dumps(result.to_dict(), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )

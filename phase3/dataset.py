@@ -29,7 +29,19 @@ class GroundTruthDataset:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ValueError(f"dataset is not valid JSON: {path}: {exc}") from exc
-        items = payload.get("samples", payload if isinstance(payload, list) else [])
+        if isinstance(payload, list):
+            items = payload
+        elif isinstance(payload, dict):
+            if "samples" not in payload:
+                raise ValueError(
+                    f"dataset JSON must contain a 'samples' key: {path}"
+                )
+            items = payload["samples"]
+        else:
+            raise ValueError(
+                f"dataset JSON must be an object or a list, got "
+                f"{type(payload).__name__}"
+            )
         if not isinstance(items, list):
             raise ValueError("Ground-truth JSON must contain a 'samples' list")
 

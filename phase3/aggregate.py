@@ -83,7 +83,16 @@ def write_csv(results: Iterable[dict], path: str | Path) -> None:
     rows = summary_rows(results)
     if not rows:
         return
-    with Path(path).open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+    # Rows are heterogeneous: sample-level columns are only present when the
+    # source result carries them, so the header must be the union of all keys.
+    fieldnames: List[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)

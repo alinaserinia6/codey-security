@@ -6,7 +6,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, List, Optional, Sequence
 import xml.etree.ElementTree as ET
 
 from .finding import Finding
@@ -20,12 +20,20 @@ class ToolRunner:
     def available(command: str) -> bool:
         return shutil.which(command) is not None
 
+    @staticmethod
+    def _int_or_none(value: Optional[str]) -> Optional[int]:
+        try:
+            return int(value) if value else None
+        except (TypeError, ValueError):
+            return None
+
     def run(self, args: Sequence[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess[str]:
         try:
             return subprocess.run(
                 list(args),
                 cwd=str(cwd) if cwd else None,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=self.timeout,
@@ -72,6 +80,9 @@ class BanditRunner(ToolRunner):
         except json.JSONDecodeError:
             out = completed.stdout or ""
             return [], [f"bandit returned non-JSON output: {out[-500:]}"]
+
+        for item in payload.get("errors", []) or []:
+            errors.append(f"bandit: {item}")
 
         for item in payload.get("results", []):
             cwe_node = item.get("issue_cwe")
@@ -189,13 +200,6 @@ class CppcheckRunner(ToolRunner):
         return findings, errors
 
     @staticmethod
-    def _int_or_none(value: Optional[str]) -> Optional[int]:
-        try:
-            return int(value) if value else None
-        except ValueError:
-            return None
-
-    @staticmethod
     def _extract_cwe(*texts: str) -> List[str]:
         """Normalize structured CWE attributes into ``CWE-<digits>`` ids.
 
@@ -274,6 +278,14 @@ class FlawfinderRunner(ToolRunner):
             return [], [f"flawfinder failed to run: {type(exc).__name__}: {exc}"]
         findings: List[Finding] = []
         errors: List[str] = []
+        if completed.returncode not in (0, 1):
+            # On failure stdout is not a CSV report (usage text, a traceback
+            # fragment, ...), and DictReader would happily turn that into
+            # phantom findings.
+            return [], [
+                f"flawfinder exited with {completed.returncode}: "
+                f"{completed.stderr.strip()}"
+            ]
         try:
             reader = csv.DictReader(io.StringIO(completed.stdout))
             for row in reader:
@@ -300,19 +312,7 @@ class FlawfinderRunner(ToolRunner):
         except csv.Error as exc:
             return [], [f"flawfinder CSV parsing failed: {exc}"]
 
-        if completed.returncode not in (0, 1):
-            errors.append(
-                f"flawfinder exited with {completed.returncode}: "
-                f"{completed.stderr.strip()}"
-            )
         return findings, errors
-
-    @staticmethod
-    def _int_or_none(value: Optional[str]) -> Optional[int]:
-        try:
-            return int(value) if value else None
-        except ValueError:
-            return None
 
     @staticmethod
     def _risk_to_severity(value: Optional[str]) -> str:
