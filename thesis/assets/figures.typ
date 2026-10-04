@@ -605,3 +605,88 @@
   )
   #v(1%)
 ])
+
+#let figure-2-3 = align(center, [
+  #v(1.5%)
+  #text(
+    dir: rtl,
+    diagram(
+      spacing: (0.3cm, 0.7cm),
+
+      node((0, 0), rect(width: 74pt, height: 56pt, [
+        #text(size: 8pt)[چالش ۱]
+        \
+        #text(size: 9.5pt, weight: "bold")[پایداریِ پاسخ]
+        \
+        #text(size: 8pt)[خروجیِ ثابت در دو اجرا]
+        #v(4%)
+      ])),
+
+      node((1, 0), rect(width: 74pt, height: 56pt, [
+        #text(size: 8pt)[چالش ۲]
+        \
+        #text(size: 9.5pt, weight: "bold")[هزینهٔ محاسباتی]
+        \
+        #text(size: 8pt)[نمونه، بازهٔ اطمینان]
+        #v(4%)
+      ])),
+
+      node((2, 0), rect(width: 74pt, height: 56pt, [
+        #text(size: 8pt)[چالش ۳]
+        \
+        #text(size: 9.5pt, weight: "bold")[نشتِ برچسب]
+        \
+        #text(size: 8pt)[خواندنِ پاسخ، نه کد]
+        #v(4%)
+      ])),
+
+      node((3, 0), rect(width: 74pt, height: 56pt, [
+        #text(size: 8pt)[چالش ۴]
+        \
+        #text(size: 9.5pt, weight: "bold")[شفافیتِ پیکربندی]
+        \
+        #text(size: 8pt)[بازتولیدِ ناممکنِ نتیجه]
+        #v(4%)
+      ])),
+
+      node((4, 0), rect(width: 74pt, height: 56pt, [
+        #text(size: 8pt)[چالش ۵]
+        \
+        #text(size: 9.5pt, weight: "bold")[پایداریِ سرویس]
+        \
+        #text(size: 8pt)[خطای شبکه، یادآوریِ کاذب]
+        #v(4%)
+      ])),
+    ),
+  )
+  #text(
+    dir: rtl,
+    size: 10pt,
+    fill: black.lighten(35%),
+    [
+      #v(1.5%)
+      شکل ۲.۳: پنج محور چالش‌برانگیزِ ارزیابی سامانه‌های مبتنی بر مدل زبانی
+    ],
+  )
+  #v(1%)
+])
+
+#let figure-4-4 = align(center, [
+  #v(2.5%)
+  #grouped-bars(
+    (
+      ([A: ایستا], (0.04,)),
+      ([B: عامل], (158.3,)),
+      ([C: ایستا+عامل], (164.4,)),
+      ([D: ایستا+ساختار+عامل], (17.4,)),
+    ),
+    ([ثانیه به ازای هر واحد کار],),
+    max: 165,
+  )
+  #_caption(
+    [
+      شکل ۴.۴: میانگین زمان پردازش به ازای هر واحد کار؛ پیکربندی‌های A و B به ازای هر فایل و پیکربندی‌های C و D به ازای هر تصمیم. بر روی همین مقیاس، میلهٔ پیکربندی A غیرقابل‌روئت است.
+    ],
+  )
+  #v(1%)
+])
