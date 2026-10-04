@@ -565,15 +565,20 @@ python scripts/run_benchmarks.py --suite llm --llm-source vulnllm_r_python \
 python scripts/run_benchmarks.py --suite llm --legs C,D --tag ablate_cd
 ```
 
-For a run against the local jev OpenCode server (slow: ~5 min/sample end to
-end, so overnight), `scripts/run_llm_jev.sh` presets the endpoint, the model,
-the tags and a time estimate:
+For the whole ladder against a local OpenCode server (slow: ~5 min/sample end
+to end, so overnight), `scripts/run_llm.sh` presets the endpoint, the tags and
+a time estimate, and takes the model as a flag — so a second model is a second
+tag instead of an overwrite:
 
 ```bash
-scripts/run_llm_jev.sh small --dry-run   # preview, ~1 h run
-scripts/run_llm_jev.sh small             # 12-sample ladder on one dataset
-scripts/run_llm_jev.sh all --limit 20    # every dataset, ~12 h
+scripts/run_llm.sh small --dry-run                 # preview, ~1 h run
+scripts/run_llm.sh small                           # 12-sample ladder, 1 dataset
+scripts/run_llm.sh all --model mimo-v2.6-flash-free  # every dataset, ~25 h
+scripts/run_llm.sh all --limit 20                  # every dataset, ~12 h
 ```
+
+`--model` defaults to `$LLM_MODEL` and then to the `.env` value; `--endpoint`
+does the same for `$LLM_BASE_URL`.
 
 Each step streams its own output as `[<step>] ...` lines, and the run ends
 with a `===== RESULT =====` block: one line per row (TP/FP/FN/TN, P, R, F1,

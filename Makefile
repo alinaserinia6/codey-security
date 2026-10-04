@@ -1,6 +1,6 @@
 PYTHON ?= python3
 
-.PHONY: help install test doctor phase1 phase2 phase3 bench bench-jev \
+.PHONY: help install test doctor phase1 phase2 phase3 bench bench-llm \
         taint-bench \
         python-bench manifest-sard manifest-devign manifest-bigvul aggregate \
         presentation clean
@@ -14,8 +14,8 @@ help:
 	@echo '  phase3       evaluate MANIFEST= through the pipeline'
 	@echo '  bench        full benchmark ladder, selectable with ARGS='
 	@echo '               (make bench ARGS="--list" to see every choice)'
-	@echo '  bench-jev    same ladder pinned to the local jev server'
-	@echo '               (make bench-jev MODE=all ARGS="--limit 20")'
+	@echo '  bench-llm    LLM ladder over one or every dataset'
+	@echo '               (make bench-llm MODE=all ARGS="--model mimo-v2.6-flash-free")'
 	@echo '  taint-bench  source-to-sink evidence vs Flawfinder on VulnLLM-R C'
 	@echo '  python-bench source-to-sink evidence vs Bandit on the Python benchmark'
 	@echo '  manifest-*   build a Phase 3 manifest from SARD / Devign / Big-Vul'
@@ -56,9 +56,11 @@ phase3:
 bench:
 	$(PYTHON) scripts/run_benchmarks.py $(ARGS)
 
-# Same ladder pinned to the local jev OpenCode server: make bench-jev MODE=all
-bench-jev:
-	scripts/run_llm_jev.sh $(or $(MODE),small) $(ARGS)
+# The LLM ladder, one dataset (MODE=small, default) or all of them (MODE=all).
+# The model, the endpoint and the sample caps are all flags:
+#   make bench-llm MODE=all ARGS="--model mimo-v2.6-flash-free --limit 20"
+bench-llm:
+	scripts/run_llm.sh $(or $(MODE),small) $(ARGS)
 
 taint-bench:
 	$(PYTHON) scripts/eval_taint_evidence.py \

@@ -445,7 +445,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--model", default=None,
                         help="LLM model id for the B/C/D legs "
                              "(sets LLM_MODEL_ID for every child step, e.g. "
-                             "--model jev-1.13-free). Default: .env value.")
+                             "--model mimo-v2.6-flash-free). Default: .env value.")
     parser.add_argument("--tag", default=None,
                         help="name used for the LLM output files "
                              "(default: <llm-source>_<llm-limit>). Set it to "
