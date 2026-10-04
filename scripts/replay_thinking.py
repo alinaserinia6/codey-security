@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from analyzers.catalog import get_catalog  # noqa: E402
 from analyzers.taint import taint_chains_for  # noqa: E402
-from phase2.models import FinalDecision, Hypothesis, ReportFinding, Verification  # noqa: E402
+from phase2.models import FinalDecision, ReportFinding, Verification  # noqa: E402
 from phase2.multiagent import MultiAgentConfig, MultiAgentPipeline  # noqa: E402
 from phase3.dataset import GroundTruthDataset  # noqa: E402
 from phase3.evaluator import evaluate  # noqa: E402

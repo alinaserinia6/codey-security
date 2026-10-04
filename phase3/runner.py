@@ -152,7 +152,7 @@ def run_phase1_benchmark(
         for fut in as_completed(futures):
             try:
                 idx, sample, report = fut.result()
-            except Exception as exc:  # noqa: BLE001 - defensive; _analyze_one already isolates
+            except Exception:  # noqa: BLE001 - defensive; _analyze_one already isolates
                 continue
             reports_by_index[idx] = {"sample_id": sample.sample_id, "report": report}
             emit_errors(sample.sample_id, report.get("errors"))
@@ -248,7 +248,7 @@ async def _run_phase2_benchmark_async(
         for fut in asyncio.as_completed(futures):
             try:
                 index, report = await fut
-            except Exception as exc:  # noqa: BLE001 - defensive; _analyze_one already isolates
+            except Exception:  # noqa: BLE001 - defensive; _analyze_one already isolates
                 continue
             phase1_by_index[index] = report
             emit_errors(samples[index].sample_id, report.get("errors"))

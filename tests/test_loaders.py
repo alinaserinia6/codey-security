@@ -21,7 +21,6 @@ from phase3.loaders import (
     load_big_vul,
     load_bigvul_hf,
     load_devign,
-    load_function_corpus,
     load_primevul,
     load_sard,
     load_vulnllm_r,

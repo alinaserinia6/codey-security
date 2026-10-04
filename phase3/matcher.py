@@ -24,14 +24,8 @@ class MatchConfig:
 #
 # The map itself lives in ``analyzers.cwe_family`` so that Phase 2 can group
 # duplicate claims with the same notion of "equivalent CWE" this matcher scores
-# with, without depending on the evaluation layer. The underscore names are
-# kept as aliases because this module's internals (and the evaluator) import
-# them by their historical names.
-from analyzers.cwe_family import (  # noqa: E402
-    CWE_PARENTS as _CWE_PARENTS,
-    cwe_family as _cwe_family,
-    cwes_match as _cwes_match,
-)
+# with, without depending on the evaluation layer.
+from analyzers.cwe_family import cwes_match as _cwes_match  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@ from agents.scanner_agent import ScannerAgent
 from agents.security_agent import SecurityAgent
 from agents.verifier_agent import VerifierAgent
 
-from .multiagent import JsonClient, MultiAgentConfig, MultiAgentPipeline
+from .multiagent import MultiAgentConfig, MultiAgentPipeline
 
 
 class RoleJsonClient:

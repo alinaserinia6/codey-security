@@ -1,4 +1,3 @@
-from phase3.dataset import GroundTruthDataset
 from phase3.evaluator import evaluate
 from phase3.matcher import MatchConfig
 from phase3.models import ConfusionMatrix, GroundTruth, Prediction

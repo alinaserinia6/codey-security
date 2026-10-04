@@ -936,7 +936,7 @@ def test_function_bounds_are_not_added_to_the_packet(tmp_path):
         confirm({"cwe": "CWE-120", "line": 27, "claim": "strcpy"}),
         [{**yes(), "cwe": ["CWE-120"]}],
     )
-    run(agent, report_of := phase1_report(path), include_structural=False)
+    run(agent, phase1_report(path), include_structural=False)
 
     for _, packet in agent.prompts:
         assert "functions" not in packet
