@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from agents.security_agent import SecurityAgent  # noqa: E402
+from agents.openai_compat import sampling_settings  # noqa: E402
 from analyzers.normalize import clamp_confidence, safe_cwe_list  # noqa: E402
 from agents import thinking_log  # noqa: E402
 from env_config import get_config  # noqa: E402  (loads .env, like every other entry point)
@@ -257,6 +258,12 @@ async def run(args) -> None:
         f"Model: {agent.model_id}  transport: {agent.transport}  "
         f"base_url: {agent.base_url}  timeout: {agent.timeout}s"
     )
+    settings = sampling_settings()
+    print(
+        f"Sampling: temperature={settings['temperature']!r}  "
+        f"reasoning_effort={settings['reasoning_effort']!r}  "
+        f"concurrency={args.concurrency}"
+    )
     if agent.transport == "openai":
         print(
             "  api key: "
@@ -293,8 +300,19 @@ async def run(args) -> None:
                 "model": agent.model_id,
                 "base_url": agent.base_url,
             }
+        # The configuration a verdict was produced under travels with the
+        # verdict: a JSONL that does not record its temperature cannot later
+        # support a claim about non-determinism.  Read from the transport, not
+        # from the environment, so a field dropped mid-run is recorded as
+        # dropped rather than as sent.
+        compat = getattr(agent, "_openai", None)
+        effective = compat.effective_settings() if compat is not None else settings
+        record["temperature"] = effective.get("temperature")
+        record["reasoning_effort"] = effective.get("reasoning_effort")
+        if effective.get("reasoning_effort_dropped"):
+            record["reasoning_effort_dropped"] = True
+        record["concurrency"] = args.concurrency
         async with reporter_lock:
-            out_file.write(json.dumps(record, ensure_ascii=False) + "\n")
             out_file.flush()
             state["i"] += 1
             if record["error"]:

@@ -16,7 +16,8 @@ OpenAI-compatible servers put in ``message.reasoning_content`` becomes
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+import ssl
+from typing import Any, Dict, Optional, Union
 from urllib.parse import urlparse
 
 import httpx
@@ -73,11 +74,30 @@ def resolve_transport(base_url: str, mode: Optional[str] = None) -> str:
     return OPENCODE_TRANSPORT
 
 
+def _tls_context() -> Union[ssl.SSLContext, bool]:
+    """TLS trust for completion requests.
+
+    A relay that terminates TLS locally -- the lingling lanes this repository
+    rides by default -- signs with its own CA, and OpenSSL 3 rejects that CA
+    for a missing Authority Key Identifier, so pointing ``verify`` at the
+    bundle alone still fails with a certificate error. Relaxing
+    ``VERIFY_X509_STRICT`` only drops that extension lint: the chain, the
+    expiry and the signature are still checked. With no bundle configured the
+    default certifi behaviour is returned untouched.
+    """
+    bundle = (os.getenv("LLM_CA_BUNDLE") or os.getenv("REQUESTS_CA_BUNDLE") or "").strip()
+    if not bundle:
+        return True
+    context = ssl.create_default_context(cafile=bundle)
+    context.verify_flags &= ~ssl.VERIFY_X509_STRICT
+    return context
+
+
 def chat_url(base_url: str) -> str:
     """Absolute ``/chat/completions`` URL for an OpenAI-style base URL.
 
     ``https://api.apmix.ai/v1`` -> ``https://api.apmix.ai/v1/chat/completions``;
-    a bare host gains the conventional ``/v1`` prefix, and a URL that already
+    a bare host gains the conventional ``/v1`` prefix and a URL that already
     ends in the endpoint is used as-is.
     """
     base = (base_url or "").strip().rstrip("/")
@@ -108,6 +128,35 @@ def _env_float(name: str, default: float) -> Optional[float]:
         return float(str(raw).strip())
     except ValueError:
         return default
+
+
+def sampling_settings(
+    temperature: Optional[float] = None,
+    reasoning_effort: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The sampling knobs a request is actually sent with.
+
+    Resolved here rather than duplicated in the provenance writers, because a
+    result file that records ``temperature: 0.2`` while the transport omitted
+    the field is worse than no record at all: it invites a non-determinism
+    conclusion the configuration cannot support.  ``None`` for temperature
+    means the field is not sent and the provider's default applies; ``None``
+    for ``reasoning_effort`` means the same.
+    """
+    resolved_temperature = (
+        temperature
+        if temperature is not None
+        else _env_float("LLM_TEMPERATURE", None)
+    )
+    resolved_effort = (
+        reasoning_effort
+        if reasoning_effort is not None
+        else (os.getenv("LLM_REASONING_EFFORT") or "")
+    ).strip()
+    return {
+        "temperature": resolved_temperature,
+        "reasoning_effort": resolved_effort or None,
+    }
 
 
 def _first_string(mapping: Dict[str, Any], *names: str) -> str:
@@ -227,22 +276,15 @@ class OpenAICompat:
                 else _env_int("LLM_MAX_TOKENS_CAP", 65536)
             ),
         )
-        self.temperature = (
-            temperature
-            if temperature is not None
-            else _env_float("LLM_TEMPERATURE", None)
-        )
+        settings = sampling_settings(temperature, reasoning_effort)
+        self.temperature = settings["temperature"]
         # ``reasoning_effort`` ("minimal" | "low" | "medium" | "high") is the
         # provider's knob for how many hidden reasoning tokens to spend before
         # answering. It dominates the bill: on this endpoint "minimal" answers
         # with 0 reasoning tokens where the default spends ~150, and a run is
         # mostly reasoning (5-6k chars of thinking behind a 1-2k char answer).
         # Empty means "do not send the field" and the provider decides.
-        self.reasoning_effort = (
-            reasoning_effort
-            if reasoning_effort is not None
-            else (os.getenv("LLM_REASONING_EFFORT") or "")
-        ).strip()
+        self.reasoning_effort = settings["reasoning_effort"] or ""
         self._effort_dropped = False
 
         key = api_key if api_key is not None else os.getenv("LLM_API_KEY") or ""
@@ -261,6 +303,7 @@ class OpenAICompat:
             timeout=self.timeout,
             headers=headers,
             follow_redirects=True,
+            verify=_tls_context(),
         )
         atexit.register(self._close)
 
@@ -269,6 +312,22 @@ class OpenAICompat:
             self._client.close()
         except Exception:  # noqa: BLE001 - shutdown must never raise
             pass
+
+    def effective_settings(self) -> Dict[str, Any]:
+        """What the next request will actually carry.
+
+        Differs from :func:`sampling_settings` after a provider rejects
+        ``reasoning_effort``: the field is dropped for the rest of the run, so
+        a record written from the *configured* value would misdescribe every
+        verdict produced after that point.
+        """
+        return {
+            "temperature": self.temperature,
+            "reasoning_effort": (
+                None if self._effort_dropped else (self.reasoning_effort or None)
+            ),
+            "reasoning_effort_dropped": self._effort_dropped,
+        }
 
     def chat(self, system: str, user: str) -> Dict[str, str]:
         """Send one prompt; returns ``{"text", "thinking"}``."""

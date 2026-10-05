@@ -105,6 +105,12 @@ class Metrics:
     )
     matched_predictions: int = 0
     unmatched_predictions: int = 0
+    #: Wilson score interval at 95% confidence for each rate that is a
+    #: binomial proportion, as ``{name: [low, high]}``.  Keyed by metric name;
+    #: ``f1`` is absent because it is not a proportion.  An entry is missing
+    #: only when its denominator is zero, i.e. when the run says nothing at
+    #: all about that rate.
+    ci95: Dict[str, List[float]] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         payload = asdict(self)

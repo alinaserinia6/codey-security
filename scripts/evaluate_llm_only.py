@@ -99,6 +99,29 @@ def _safe_float(value) -> float:
         return 0.0
 
 
+def _float_or_none(value):
+    """A number that was never recorded stays unrecorded.
+
+    ``0.0`` is a legitimate temperature, so the usual ``value or None`` test
+    would erase exactly the setting this is meant to capture.
+    """
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value):
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def build_predictions(records: List[dict], experiment: str) -> List[Prediction]:
     predictions: List[Prediction] = []
     for record in records:
@@ -166,6 +189,23 @@ def main() -> None:
     errors = [str(r["sample_id"]) for r in records if r.get("error")]
     elapsed = sum(_safe_float(r.get("elapsed")) for r in records)
 
+    # Sampling settings are read back from the records, never from the
+    # current environment: this evaluation may run hours after the run it
+    # scores, and a provenance block that echoes today's .env would describe
+    # a configuration that was never used.  Records written before these
+    # fields existed contribute nothing, so the entry is None rather than a
+    # guess.
+    temperatures = sorted(
+        {_float_or_none(r.get("temperature")) for r in records} - {None}
+    )
+    efforts = sorted(
+        {str(r["reasoning_effort"]) for r in records if r.get("reasoning_effort")}
+    )
+    dropped = sum(1 for r in records if r.get("reasoning_effort_dropped"))
+    concurrencies = sorted(
+        {_int_or_none(r.get("concurrency")) for r in records} - {None}
+    )
+
     result.metadata["provenance"] = {
         "experiment": args.experiment,
         "dataset": str(Path(args.dataset).resolve()),
@@ -185,6 +225,10 @@ def main() -> None:
         "error_samples": len(errors),
         "error_sample_ids": errors[:50],
         "summed_request_seconds": round(elapsed, 2),
+        "temperatures_in_file": temperatures or None,
+        "reasoning_efforts_in_file": efforts or None,
+        "reasoning_effort_dropped_records": dropped or None,
+        "concurrencies_in_file": concurrencies or None,
     }
     save_result(result, args.out)
 

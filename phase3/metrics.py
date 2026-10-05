@@ -21,13 +21,65 @@ therefore charged a *larger* benign denominator, which is how the static
 baseline ended up with the worst ``balanced_accuracy`` of the four while its
 finding-level precision was simply a different question. Pass the sample-level
 matrix and those four rates are computed over files on both sides.
+
+Every rate is reported with a Wilson score interval in ``Metrics.ci95``: the
+benchmark's true-positive counts are small enough (three for configuration C)
+that the point estimate alone says almost nothing, and an interval is the only
+honest way to read them. ``f1`` is deliberately absent -- it is not a binomial
+proportion, so a Wilson interval over it would be meaningless.
 """
 from __future__ import annotations
 
-from math import isfinite
-from typing import Optional
+from math import isfinite, sqrt
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from .models import ConfusionMatrix, Metrics
+
+#: 97.5th percentile of the standard normal, i.e. z for a two-sided 95%
+#: interval.  Hard-coded rather than pulled from a statistics package so the
+#: evaluation layer keeps its zero-dependency profile.
+Z_95 = 1.959963984540054
+
+
+def wilson_interval(
+    successes: int, trials: int, z: float = Z_95
+) -> Tuple[float, float]:
+    """Wilson score interval for a binomial proportion.
+
+    A normal approximation is worthless at the sample sizes this benchmark
+    actually has: configuration C reports three true positives, where
+    ``p ± 1.96·SE`` produces an interval that runs below zero and a run with a
+    single success would report ``0 ± 0.98``.  The Wilson score interval stays
+    inside ``[0, 1]``, is defined at ``x = 0`` and ``x = n``, and is the
+    interval the thesis quotes -- so the numbers printed in the evaluation
+    chapter are reproducible from the archived results instead of being
+    transcribed by hand.
+
+    ``trials == 0`` carries no information at all, so the whole range is
+    returned.
+    """
+    if trials <= 0:
+        return (0.0, 1.0)
+    if successes < 0 or successes > trials:
+        raise ValueError(
+            f"successes must be within [0, trials]; got {successes}/{trials}"
+        )
+    n = float(trials)
+    p = successes / n
+    z2 = z * z
+    denom = 1.0 + z2 / n
+    center = (p + z2 / (2.0 * n)) / denom
+    half = (z * sqrt((p * (1.0 - p) / n) + (z2 / (4.0 * n * n)))) / denom
+    # Wilson's lower bound at x = 0 is exactly 0 and its upper bound at
+    # x = n is exactly 1; the subtraction above lands a few ulps off, and
+    # printing 8.7e-19 as a lower bound would read as a claim.
+    low = 0.0 if successes == 0 else max(0.0, center - half)
+    high = 1.0 if successes == trials else min(1.0, center + half)
+    return (low, high)
+
+
+def _round_bounds(interval: Sequence[float]) -> List[float]:
+    return [round(float(interval[0]), 6), round(float(interval[1]), 6)]
 
 
 def _div(numerator: float, denominator: float) -> float:
@@ -90,6 +142,18 @@ def compute_metrics(
     if negative_support is None:
         negative_support = (s_tn + s_fp) if sample_cm is not None else (tn + fp)
 
+    ci95: Dict[str, List[float]] = {}
+    for name, successes, trials in (
+        ("precision", tp, tp + fp),
+        ("recall", tp, tp + fn),
+        ("false_positive_rate", s_fp, s_fp + s_tn),
+        ("specificity", s_tn, s_tn + s_fp),
+        ("false_negative_rate", s_fn, s_fn + s_tp),
+        ("accuracy", s_tp + s_tn, s_tp + s_tn + s_fp + s_fn),
+    ):
+        if trials > 0:
+            ci95[name] = _round_bounds(wilson_interval(successes, trials))
+
     return Metrics(
         confusion=cm,
         sample_confusion=ConfusionMatrix(s_tp, s_fp, s_fn, s_tn),
@@ -105,4 +169,5 @@ def compute_metrics(
         negative_support=negative_support,
         matched_predictions=matched_predictions,
         unmatched_predictions=unmatched_predictions,
+        ci95=ci95,
     )

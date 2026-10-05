@@ -6,13 +6,18 @@ ground truth with one policy.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Tuple
 
 from analyzers.normalize import clamp_confidence, safe_cwe_list
 
 from .models import Prediction
 
 CONFIRMED = "CONFIRMED"
+REJECTED = "REJECTED"
+UNCERTAIN = "UNCERTAIN"
+
+#: The verdicts a decision can carry, in the order they are reported.
+DECISION_STATUSES: Tuple[str, ...] = (CONFIRMED, REJECTED, UNCERTAIN)
 
 
 def _safe_line(value) -> "int | None":
@@ -64,20 +69,44 @@ def predictions_from_phase1(
 
 
 def predictions_from_phase2(
-    report: Dict[str, Any], sample_id: str
+    report: Dict[str, Any],
+    sample_id: str,
+    statuses: Iterable[str] = (CONFIRMED,),
 ) -> List[Prediction]:
-    """Only agent groups whose verdict is CONFIRMED are reported.
+    """Turn agent verdicts into predictions, keeping only the wanted verdicts.
 
-    REJECTED and UNCERTAIN groups are withheld from the final report by design:
+    Only agent groups whose verdict is ``CONFIRMED`` are reported by default:
     the verifier is reject-by-default, so a report entry is a claim the agent
-    could support with evidence.
+    could support with evidence, and ``REJECTED``/``UNCERTAIN`` groups are
+    withheld from the final report by design.
+
+    ``statuses`` exists for offline counterfactual scoring, never for the
+    shipped pipeline.  Re-scoring an archived run with
+    ``statuses=(CONFIRMED, UNCERTAIN)`` answers "what would recall have been
+    had the uncertain verdicts been triaged instead of dropped?" using the
+    stored reports, so the question costs no model calls -- see
+    ``scripts/policy_counterfactual.py``.  The prediction keeps the verdict it
+    actually carried, so a counterfactual table can still tell the two apart.
     """
+    wanted = {str(status).upper() for status in statuses}
+    unknown = wanted - set(DECISION_STATUSES)
+    if unknown:
+        raise ValueError(
+            f"unknown decision status {sorted(unknown)}; "
+            f"expected a subset of {list(DECISION_STATUSES)}"
+        )
     source = _source_of(report)
     predictions: List[Prediction] = []
     for decision in report.get("decisions", []):
         if not isinstance(decision, dict):
             continue
-        if str(decision.get("status", "UNCERTAIN")).upper() != CONFIRMED:
+        status = str(decision.get("status", UNCERTAIN)).upper()
+        if status not in DECISION_STATUSES:
+            # The parser normalises an unreadable verdict to UNCERTAIN; do the
+            # same here so an archived report with a stray value cannot be
+            # silently counted as a confirmation.
+            status = UNCERTAIN
+        if status not in wanted:
             continue
         line = decision.get("line")
         predictions.append(
@@ -87,7 +116,7 @@ def predictions_from_phase2(
                 vulnerable=True,
                 cwe=safe_cwe_list(decision.get("cwe", [])),
                 line=_safe_line(line),
-                status=CONFIRMED,
+                status=status,
                 confidence=clamp_confidence(decision.get("confidence")),
                 source="phase2",
                 raw=decision,

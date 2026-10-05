@@ -514,6 +514,39 @@ python scripts/recompute_result.py results/exp_C_static_llm_subset600.json
 from; the same command still works on it, reading the prediction set back out
 of its `matches` and `unmatched_predictions`.
 
+Score those same reports under a different verdict policy and attribute every
+missed positive to the stage that lost it — the shipped report keeps only
+`CONFIRMED` groups, but the `REJECTED` and `UNCERTAIN` verdicts are still in
+the file, so the cost of that filter can be measured instead of argued about.
+No analyzers run and no model is called:
+
+```bash
+python scripts/policy_counterfactual.py \
+    results/exp_C_static_llm_subset600.json \
+    results/exp_D_static_structural_llm_subset600.json \
+    --triage-dir results/triage
+```
+
+Each rate it prints carries a Wilson 95% interval (`phase3/metrics.py`), the
+same intervals as table 4.8 of the thesis. `docs/FOLLOWUP_STUDY.md` reads the
+output as the starting point of the follow-up research programme.
+
+All four configurations score the same 600 files, so the comparison between
+them is paired: `scripts/compare_paired.py` rebuilds each run's predictions
+from its own stored reports, re-scores both with that run's own matching
+policy, and prints the discordance table before the p-value — with 11 true
+positives, how many files disagreed carries more argument than the number
+derived from it. Reads the archives, writes nothing:
+
+```bash
+make paired A=results/exp_C_static_llm_subset600.json \
+           B=results/exp_D_static_structural_llm_subset600.json
+```
+
+On the shipped pair C vs D no stratum separates (p ≥ 0.125), which is the
+test behind the thesis's claim that the configurations cannot be ranked at
+95% confidence; accuracy separates no pair at all (p ≥ 0.129).
+
 ---
 
 ## Recommended research experiments
@@ -629,7 +662,13 @@ python scripts/aggregate_phase3.py results/exp_A_static.json \
 
 Each result file carries `metadata.provenance`: dataset, model, base URL,
 structural-evidence switch, line tolerance, tool versions, elapsed time and
-the finish timestamp.
+the finish timestamp. Runs that call a model additionally record the sampling
+settings they were sent with — `temperature`, `reasoning_effort`, and for
+Experiment B the per-record `concurrency` — read from the transport's own
+resolver rather than re-declared at each call site, so a result file cannot
+describe a configuration that was never sent. A static-only run records them
+as `null`, and the Experiment B evaluation unions them out of the JSONL rather
+than out of the environment of the machine that happens to run it.
 
 ---
 
@@ -716,6 +755,12 @@ For research runs:
   from one would be measuring a corpus whose labels are unverified. That is not
   worth a row in the results table.
 
+The limitations of the *evaluation* — the recall cost of the evidence filter,
+the cost per decision, the CWE-190 blind spot, the width of the confidence
+intervals, the function-scoped context, and the stability of the harness — are
+analysed with measured numbers and a prioritised plan in
+`docs/FOLLOWUP_STUDY.md`.
+
 ### Devign (independent evidence)
 
 The Devign corpus (27,318 labelled C functions from qemu and FFmpeg, from
@@ -796,9 +841,23 @@ markers survived, so the corpus is usable for the LLM phases as well.
 - [x] Ablation switches for structural, taint and tool evidence
 - [x] SARD / Devign / Big-Vul manifest loaders
 - [x] Devign measured on all 27,258 functions plus a Flawfinder comparison
+- [x] Wilson score intervals on every rate (`phase3/metrics.py`, reproduces
+      table 4.8 of the thesis)
+- [x] Verdict-policy counterfactual and miss decomposition over archived runs
+      (`scripts/policy_counterfactual.py`)
+- [x] Paired significance tests between archived runs — exact McNemar on
+      per-sample discordance (`phase3/significance.py`,
+      `scripts/compare_paired.py`, `make paired`)
+- [x] Sampling settings in provenance (`temperature`, `reasoning_effort`,
+      leg-B concurrency), resolved once in `agents/openai_compat.py` and read
+      back from the records by the evaluation
 
 ### Next
 
+- [ ] Follow-up study planned in `docs/FOLLOWUP_STUDY.md`: triage lane for
+      `UNCERTAIN` verdicts, integer-overflow candidate generator,
+      content-addressed LLM response cache, forced `missing_context` checklist,
+      `prompt_version` in provenance
 - [ ] Inter-procedural taint propagation
 - [ ] Measure SARD or Big-Vul as well, if a source of record for their labels
       can be found, so the independent evidence spans more than one corpus

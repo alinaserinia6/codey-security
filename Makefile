@@ -3,7 +3,7 @@ PYTHON ?= python3
 .PHONY: help install test doctor phase1 phase2 phase3 bench bench-llm \
         taint-bench \
         python-bench manifest-sard manifest-devign manifest-bigvul aggregate \
-        presentation clean
+        counterfactual paired presentation clean
 
 help:
 	@echo 'Targets:'
@@ -20,6 +20,8 @@ help:
 	@echo '  python-bench source-to-sink evidence vs Bandit on the Python benchmark'
 	@echo '  manifest-*   build a Phase 3 manifest from SARD / Devign / Big-Vul'
 	@echo '  aggregate    merge the experiment JSON files into a comparison CSV'
+	@echo '  counterfactual  re-score archived runs under another verdict policy'
+	@echo '  paired         McNemar test between two archived runs, A= B='
 	@echo '  presentation rebuild the defence deck'
 
 install:
@@ -81,6 +83,22 @@ aggregate:
 		$(or $(RESULTS),results/exp_vulnllm_r_c_static.json \
 			results/exp_vulnllm_r_python_static.json \
 			results/exp_vulnllm_r_c_dataflow_static.json)
+
+# Score the verdicts already stored in a run under a different policy and say
+# which stage lost each missed positive. Offline: no analyzers, no model.
+counterfactual:
+	$(PYTHON) scripts/policy_counterfactual.py \
+		$(or $(RESULTS),results/exp_C_static_llm_subset600.json \
+			results/exp_D_static_structural_llm_subset600.json) \
+		$(if $(OUT),--json $(OUT),)
+
+# Two runs over the same corpus are a paired experiment: compare them file by
+# file instead of by overlapping intervals. Reads the archives, writes nothing.
+#   make paired A=results/exp_A_static_subset600.json B=results/exp_C_static_llm_subset600.json
+paired:
+	@test -n "$(A)" && test -n "$(B)" || \
+		(echo 'Usage: make paired A=<result.json> B=<result.json>'; exit 1)
+	$(PYTHON) scripts/compare_paired.py $(A) $(B) $(if $(JSON),--json $(JSON),)
 
 # Convert a public corpus into the same manifest format the other benchmarks
 # use, so one evaluation harness measures all of them. CORPUS points at a

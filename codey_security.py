@@ -18,6 +18,7 @@ import asyncio
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -352,9 +353,65 @@ def _tool_versions() -> Dict[str, str]:
     return versions
 
 
-def run_phase3(config: Config) -> dict[str, Any]:
-    import time
+def _sampling_provenance(mode: str) -> Dict[str, Any]:
+    """Sampling knobs for the provenance block.
 
+    Recorded only for the modes that actually call a model: writing a
+    temperature next to a static-only run would claim an experiment that never
+    happened.  The values come from the transport's own resolution so a result
+    file cannot drift from what was sent -- this block exists because
+    ``temperature`` and ``reasoning_effort`` were sent on every run and written
+    into none of them, which makes a non-determinism claim unauditable.
+    """
+    if mode != "phase2":
+        return {"temperature": None, "reasoning_effort": None}
+    from agents.openai_compat import sampling_settings
+
+    return dict(sampling_settings())
+
+
+def _provenance_block(
+    scenario: ScenarioConfig,
+    dataset_path: Path | str,
+    sample_count: int,
+    config: Config,
+    *,
+    elapsed_seconds: float | None = None,
+) -> Dict[str, Any]:
+    """Everything needed to say which configuration produced a result.
+
+    Shared by ``run_phase3`` and ``run_full`` so the two paths cannot drift
+    apart on the fields a reader uses to tell them apart.  ``elapsed_seconds``
+    is passed only where it denotes the same quantity: a phase3 result times
+    that phase's evaluation, while ``full`` spans Phase 1 + 2 + 3 and would be
+    a different number under the same name, so it is omitted rather than
+    invented.
+    """
+    block: Dict[str, Any] = {
+        "dataset": str(dataset_path),
+        "dataset_samples": sample_count,
+        "mode": scenario.mode,
+        "label": os.getenv("SCENARIO_PHASE3_LABEL", scenario.mode),
+        "model": config.llm_model_id if scenario.mode == "phase2" else None,
+        "base_url": config.llm_base_url if scenario.mode == "phase2" else None,
+        "include_structural": (
+            config.phase2_include_structural if scenario.mode == "phase2" else None
+        ),
+        "phase2_concurrency": config.phase2_concurrency,
+        "phase2_max_groups": config.phase2_max_groups,
+        "line_tolerance": config.phase3_line_tolerance,
+        "require_cwe_match": scenario.require_cwe_match,
+        **_sampling_provenance(scenario.mode),
+    }
+    if elapsed_seconds is not None:
+        block["elapsed_seconds"] = round(elapsed_seconds, 2)
+    block["tool_versions"] = _tool_versions()
+    block["python_version"] = sys.version.split()[0]
+    block["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    return block
+
+
+def run_phase3(config: Config) -> dict[str, Any]:
     from analyzers.phase1_pipeline import Phase1Pipeline
     from phase3.dataset import GroundTruthDataset
     from phase3.evaluator import evaluate
@@ -394,25 +451,13 @@ def run_phase3(config: Config) -> dict[str, Any]:
         ),
     )
     result.metadata["reports"] = reports
-    result.metadata["provenance"] = {
-        "dataset": str(dataset_path),
-        "dataset_samples": len(dataset),
-        "mode": scenario.mode,
-        "label": os.getenv("SCENARIO_PHASE3_LABEL", scenario.mode),
-        "model": config.llm_model_id if scenario.mode == "phase2" else None,
-        "base_url": config.llm_base_url if scenario.mode == "phase2" else None,
-        "include_structural": (
-            config.phase2_include_structural if scenario.mode == "phase2" else None
-        ),
-        "phase2_concurrency": config.phase2_concurrency,
-        "phase2_max_groups": config.phase2_max_groups,
-        "line_tolerance": config.phase3_line_tolerance,
-        "require_cwe_match": scenario.require_cwe_match,
-        "elapsed_seconds": round(time.monotonic() - started, 2),
-        "tool_versions": _tool_versions(),
-        "python_version": sys.version.split()[0],
-        "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-    }
+    result.metadata["provenance"] = _provenance_block(
+        scenario,
+        dataset_path,
+        len(dataset),
+        config,
+        elapsed_seconds=time.monotonic() - started,
+    )
     save_result(result, scenario.output)
     print(f"Report written to {scenario.output}")
     _print_error_summary(_collect_report_errors(reports))
@@ -490,6 +535,13 @@ def run_full(config: Config) -> dict[str, Any]:
         ),
     )
     result.metadata["reports"] = reports
+    # No elapsed_seconds here: this path covers Phase 1 + 2 + 3 in one run, so
+    # a field of that name would not mean what it means in a phase3 result.
+    # Everything that identifies *what ran* is recorded; the duration is not
+    # invented.
+    result.metadata["provenance"] = _provenance_block(
+        scenario, scenario.dataset, len(dataset), config
+    )
     evaluation_output = scenario.evaluation_output or "results/phase3_result.json"
     save_result(result, evaluation_output)
     print(f"Report written to {evaluation_output}")
