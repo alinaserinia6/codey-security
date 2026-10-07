@@ -570,39 +570,3 @@
   )
   #v(1%)
 ])
-
-#let table-4-10 = align(center, [
-  #v(2.5%)
-  #text(dir: rtl, table(
-    columns: 6,
-    inset: 6pt,
-    stroke: gray + 1pt,
-    align: center + horizon,
-    table.header(
-      _hd([*پیکربندی*]),
-      _hd([*زبان*]),
-      _hd([*فایل*]),
-      _hd([*مثبت درست / نادرست*]),
-      _hd([*یادآوری*]),
-      _hd([*نرخ هشدار روی فایل سالم*]),
-    ),
-    [*A*], [#text(dir: ltr)[C]], [۲۹۹], [#text(dir: ltr)[3 / 11]], [۰٫۰۱۹], [۰٫۰۵۰],
-    [*A*], [#text(dir: ltr)[C++]], [۳۰۱], [#text(dir: ltr)[8 / 9]], [۰٫۰۵۶], [۰٫۰۵۰],
-    [*B*], [#text(dir: ltr)[C]], [۲۹۹], [#text(dir: ltr)[19 / 34]], [۰٫۱۲۰], [۰٫۱۹۹],
-    [*B*], [#text(dir: ltr)[C++]], [۳۰۱], [#text(dir: ltr)[25 / 41]], [۰٫۱۷۶], [۰٫۱۹۵],
-    [*C*], [#text(dir: ltr)[C]], [۲۹۹], [#text(dir: ltr)[1 / 1]], [۰٫۰۰۶], [۰٫۰۰۷],
-    [*C*], [#text(dir: ltr)[C++]], [۳۰۱], [#text(dir: ltr)[2 / 1]], [۰٫۰۱۴], [۰٫۰۰۶],
-    [*D*], [#text(dir: ltr)[C]], [۲۹۹], [#text(dir: ltr)[1 / 3]], [۰٫۰۰۶], [۰٫۰۲۱],
-    [*D*], [#text(dir: ltr)[C++]], [۳۰۱], [#text(dir: ltr)[4 / 3]], [۰٫۰۲۸], [۰٫۰۱۹],
-  ))
-  #text(
-    dir: rtl,
-    size: 10pt,
-    fill: black.lighten(35%),
-    [
-      #v(0.5%)
-      جدول ۴.۱۰: نتایج چهار پیکربندی به تفکیک زبان
-    ],
-  )
-  #v(1%)
-])
