@@ -6,7 +6,7 @@
 #import "chapters/originality.typ"
 #import "chapters/acknowledgement.typ"
 #import "chapters/dedication.typ"
-#import "chapters/abstract.typ" as apstract
+#import "chapters/abstract.typ"
 
 #import "chapters/list-of-contents.typ"
 #import "chapters/list-of-figures.typ"
@@ -73,7 +73,7 @@
 #set page(numbering: utils.alphabet_numbering)
 
 #context counter(footnote).update(0)
-#apstract
+#abstract
 #pagebreak()
 
 #list-of-contents

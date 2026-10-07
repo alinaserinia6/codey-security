@@ -313,6 +313,7 @@ async def run(args) -> None:
             record["reasoning_effort_dropped"] = True
         record["concurrency"] = args.concurrency
         async with reporter_lock:
+            out_file.write(json.dumps(record, ensure_ascii=False) + "\n")
             out_file.flush()
             state["i"] += 1
             if record["error"]:

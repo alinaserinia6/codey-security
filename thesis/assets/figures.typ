@@ -361,6 +361,18 @@
   rgb("#718096"),
 )
 
+#let _palette_2 = (
+  rgb("#c05621"),
+  rgb("#2f855a"),
+)
+
+#let _palette_3 = (
+  rgb("#2f855a"),
+  rgb("#c05621"),
+  rgb("#718096"),
+)
+
+
 #let _legend(series, colors: _palette) = align(center, {
   for (i, s) in series.enumerate() {
     box(inset: (x: 5pt), baseline: 35%, [
@@ -376,15 +388,63 @@
   }
 })
 
+#let _legend_2(series, colors: _palette_2) = align(center, {
+  for (i, s) in series.enumerate() {
+    box(inset: (x: 5pt), baseline: 35%, [
+      #rect(
+        width: 18pt,
+        height: 9pt,
+        fill: colors.at(i),
+        stroke: 0.5pt + gray.lighten(45%),
+      )
+      #h(4pt)
+      #text(size: 10pt)[#s]
+    ])
+  }
+})
+
+#let _legend_3(series, colors: _palette_3) = align(center, {
+  for (i, s) in series.enumerate() {
+    box(inset: (x: 5pt), baseline: 35%, [
+      #rect(
+        width: 18pt,
+        height: 9pt,
+        fill: colors.at(i),
+        stroke: 0.5pt + gray.lighten(45%),
+      )
+      #h(4pt)
+      #text(size: 10pt)[#s]
+    ])
+  }
+})
+
+
+/// Fixed-decimal string formatting for bar value labels.
+#let _fixed(v, n) = {
+  let scale = calc.pow(10, n)
+  let iv = int(calc.round(v * scale))
+  let whole = calc.div-euclid(iv, scale)
+  let frac = calc.rem-euclid(iv, scale)
+  let fs = str(frac)
+  let pad = n - fs.len()
+  let padded = if pad > 0 { range(pad).map(_ => "0").join() + fs } else { fs }
+  str(whole) + "." + padded
+}
+
 /// Grouped horizontal bar chart.
 /// groups: ((label, (value, ...)), ...)
 /// series: (label, ...)
+/// digits: auto (print values as-is) or a decimal count
 #let grouped-bars(
   groups,
   series,
   colors: _palette,
   max: auto,
   track: 6.9cm,
+  digits: auto,
+  label-width: auto,
+  series-width: auto,
+  value-width: auto,
 ) = {
   let flat = groups.map(g => g.at(1)).flatten()
   let mx = if max == auto { calc.max(..flat) } else { max }
@@ -392,27 +452,32 @@
   for g in groups {
     for (i, s) in series.enumerate() {
       let v = g.at(1).at(i)
-      let st = if i == 0 {
-        (top: 0.7pt + gray.lighten(30%))
-      } else {
-        none
-      }
+      let label = if digits == auto { [#v] } else { [#_fixed(v, digits)] }
+      let st = if i == 0 { (top: 0.7pt + gray.lighten(30%)) } else { none }
       let bar = calc.max(1.5pt, track * v / mx)
-      cells.push(grid.cell(
-        stroke: st,
-        align: horizon,
-        [#if i == 0 { text(size: 11pt, weight: "bold")[#g.at(0)] }],
-      ))
+
+      // ستون ۱: برچسب گروه (فقط ردیف اول هر گروه)
       cells.push(grid.cell(
         stroke: st,
         align: horizon + right,
-        [#text(dir: rtl, size: 10pt)[#s]],
+        [#if i == 0 {
+          text(dir: rtl, size: 10pt, weight: "bold", g.at(0))
+        }],
       ))
+
+      // ستون ۲: نام سری
+      cells.push(grid.cell(
+        stroke: st,
+        align: horizon + right,
+        [#text(dir: rtl, size: 10pt, s)],
+      ))
+
+      // ستون ۳: میله
       cells.push(grid.cell(
         stroke: st,
         align: horizon,
         box(
-          width: track,
+          width: 100%,
           height: 12pt,
           inset: 0pt,
           stroke: (left: 0.9pt + black),
@@ -424,15 +489,24 @@
           )),
         ),
       ))
+
+      // ستون ۴: مقدار
       cells.push(grid.cell(
         stroke: st,
         align: horizon + left,
-        [#text(dir: ltr, size: 9.5pt)[#v]],
+        [#text(dir: ltr, size: 9.5pt, label)],
       ))
     }
   }
+
+  // ستون‌ها: برچسب‌ها auto، میله 1fr، مقدار auto
   grid(
-    columns: (1.5cm, 3.5cm, track, 1.7cm),
+    columns: (
+      if label-width == auto { auto } else { label-width },
+      if series-width == auto { auto } else { series-width },
+      1fr,                             // ← میله فضای باقی‌مانده را می‌گیرد
+      if value-width == auto { auto } else { value-width },
+    ),
     column-gutter: 7pt,
     row-gutter: 4.5pt,
     ..cells,
@@ -457,8 +531,8 @@
     (
       ([A: ایستا], (0.355, 0.037, 0.050)),
       ([B: عامل], (0.370, 0.147, 0.197)),
-      ([C: ایستا+عامل], (0.600, 0.010, 0.007)),
-      ([D: ایستا+ساختار+عامل], (0.455, 0.017, 0.020)),
+      ([C: ایستا + عامل], (0.600, 0.010, 0.007)),
+      ([D: ایستا +  ساختار+عامل], (0.455, 0.017, 0.020)),
     ),
     ([دقت یافته], [یادآوری], [نرخ هشدار سالم]),
   )
@@ -488,7 +562,7 @@
     ),
     ([مثبت درست], [مثبت نادرست]),
   )
-  #v(7pt)
+  #v(37pt)
   #text(
     dir: rtl,
     size: 11pt,
@@ -496,7 +570,7 @@
     [منفی‌ها (دانه‌بندی یافته و فایل)],
   )
   #v(3pt)
-  #_legend(([منفی نادرست (یافته)], [منفی درست (فایل)]))
+  #_legend_2(([منفی نادرست (یافته)], [منفی درست (فایل)]))
   #v(3pt)
   #grouped-bars(
     (
@@ -516,9 +590,89 @@
   #v(1%)
 ])
 
-#let figure-4-3 = align(center, [
+#let _tradeoff-plot() = {
+  let W = 9.0cm
+  let H = 5.4cm
+  let ox = 2.1cm
+  let oy = 0.62cm
+  let xmax = 0.16
+  let ymax = 0.70
+  let pts = (
+    ("A", 0.037, 0.355, 0.050),
+    ("B", 0.147, 0.370, 0.197),
+    ("C", 0.010, 0.600, 0.007),
+    ("D", 0.017, 0.455, 0.020),
+  )
+  let px(v) = W * v / xmax
+  let py(v) = H * (1 - v / ymax)
+  let grid-paint = gray.lighten(62%)
+  block(width: ox + W + 0.7cm, height: oy + H + 1.05cm, {
+    for t in (0.0, 0.04, 0.08, 0.12, 0.16) {
+      place(top + left, dx: ox + px(t), dy: oy, rect(width: 0.4pt, height: H, fill: grid-paint, stroke: none))
+      place(top + left, dx: ox + px(t) - 0.5cm, dy: oy + H + 4pt,
+        box(width: 1.0cm, align(center, text(dir: ltr, size: 8.5pt)[#t])))
+    }
+    for t in (0.0, 0.2, 0.4, 0.6) {
+      place(top + left, dx: ox, dy: oy + py(t), rect(width: W, height: 0.4pt, fill: grid-paint, stroke: none))
+      place(top + left, dx: ox - 0.62cm, dy: oy + py(t) - 6pt,
+        box(width: 0.55cm, align(right, text(dir: ltr, size: 8.5pt)[#t])))
+    }
+    place(top + left, dx: ox, dy: oy + py(0.355),
+      line(length: W, stroke: (paint: rgb("#718096"), thickness: 0.7pt, dash: "dashed")))
+    place(top + left, dx: ox + 0.05cm, dy: oy + py(0.355) - 14pt,
+      text(dir: rtl, size: 8.5pt, fill: black.lighten(15%))[خطِ دقت])
+    place(top + left, dx: ox, dy: oy,
+      rect(width: W, height: H, fill: none, stroke: (left: 1pt + black, bottom: 1pt + black)))
+    place(top + left, dx: ox - 0.62cm, dy: 0.04cm,
+      text(dir: rtl, size: 9pt, weight: "bold")[دقت یافته])
+    place(top + left, dx: ox + W / 2 - 1.7cm, dy: oy + H + 0.42cm,
+      box(width: 3.4cm, align(center, text(dir: rtl, size: 9pt, weight: "bold")[یادآوری (دانه‌بندی یافته)])))
+    for (i, p) in pts.enumerate() {
+      let name = p.at(0)
+      let rec = p.at(1)
+      let prec = p.at(2)
+      let fpr = p.at(3)
+      let cx = ox + px(rec)
+      let cy = oy + py(prec)
+      let r = 3pt + 9pt * calc.sqrt(fpr / 0.197)
+      let c = _palette.at(i)
+      place(top + left, dx: cx - r, dy: cy - r,
+        circle(radius: r, fill: c.lighten(45%), stroke: 1.1pt + c))
+      if name == "B" {
+        place(top + left, dx: cx - r - 3pt - 0.45cm, dy: cy - 7pt,
+          box(width: 0.45cm, align(right, text(dir: ltr, size: 10pt, weight: "bold")[#name])))
+      } else {
+        place(top + left, dx: cx + r + 3pt, dy: cy - 7pt,
+          box(width: 0.45cm, align(left, text(dir: ltr, size: 10pt, weight: "bold")[#name])))
+      }
+    }
+  })
+}
+
+#let figure-4-3 = block(breakable: false, align(center, [
   #v(2.5%)
-  #_legend(([تأییدشده], [ردشده], [نامطمئن]))
+  #_legend(([A: ایستا], [B: عامل], [C: ایستا+عامل], [D: ایستا+ساختار+عامل]))
+  #v(6pt)
+  #_tradeoff-plot()
+  #_caption(
+    [
+      شکل ۴.۳: نمای مبادلهٔ دقت و یادآوری برای چهار پیکربندی؛ اندازهٔ هر حباب متناسب با نرخ هشدار روی فایل سالم است
+
+      (
+        A: ۰٫۰۵۰،
+        B: ۰٫۱۹۷،
+        C: ۰٫۰۰۷،
+        D: ۰٫۰۲۰
+      ).
+      خط‌چین، دقتِ پیکربندی A را نشان می‌دهد؛ هر چه حباب به گوشهٔ بالا-چپ نزدیک‌تر باشد، هم دقت بیشتری دارد و هم هشدار کمتری می‌سازد.
+    ],
+  )
+  #v(1%)
+]))
+
+#let figure-4-4 = align(center, [
+  #v(2.5%)
+  #_legend_3(([تأییدشده], [ردشده], [نامطمئن]))
   #v(4pt)
   #grouped-bars(
     (
@@ -528,9 +682,57 @@
     ([تأییدشده], [ردشده], [نامطمئن]),
     colors: (rgb("#2f855a"), rgb("#c05621"), rgb("#718096")),
   )
-  #_caption([شکل ۴.۳: اثر شواهد ساختاری بر تصمیم‌های عامل زبانی])
+  #_caption([شکل ۴.۴: اثر شواهد ساختاری بر تصمیم‌های عامل زبانی؛ با افزودن شواهد، تأییدها از ۵ به ۱۱ رسید و نامطمئن‌ها از ۱۳ به ۶ کاهش یافت])
   #v(1%)
 ])
+
+#let figure-4-5 = block(breakable: false, align(center, [
+  #v(2.5%)
+  #text(
+    dir: rtl,
+    size: 11pt,
+    weight: "bold",
+    [یادآوری در هر سه مجموعه],
+  )
+  #v(5pt)
+  #_legend(([موتور شواهد], [ابزار پایه]))
+  #v(5pt)
+  #grouped-bars(
+    (
+      ([جولیت: ۶۰۰], (0.023, 0.043)),
+      ([دیویگن متوازن: ۶۰۰], (0.057, 0.020)),
+      ([پایتون: ۴۸], (1.0, 0.667)),
+    ),
+    ([موتور شواهد], [ابزار پایه]),
+    digits: 3,
+  )
+  #v(21pt)
+  #text(
+    dir: rtl,
+    size: 11pt,
+    weight: "bold",
+    [نرخ هشدار روی فایل سالم],
+  )
+  #v(5pt)
+  #_legend(([موتور شواهد], [ابزار پایه]))
+  #v(5pt)
+  #grouped-bars(
+    (
+      ([جولیت: ۶۰۰], (0.023, 0.033)),
+      ([دیویگن متوازن: ۶۰۰], (0.070, 0.037)),
+      ([پایتون: ۴۸], (0.042, 0.250)),
+    ),
+    ([موتور شواهد], [ابزار پایه]),
+    digits: 3,
+  )
+  #_caption(
+    [
+      شکل ۴.۵: توان موتور شواهد در برابر ابزار پایه روی هر سه مجموعه؛ موتور شواهد روی دیویگن یادآوری بیشتر و روی پایتون هم دقت بیشتر و هم هشدار کمتری دارد،
+      اما در جولیت از فلافایندر عقب می‌ماند. عدد یادآوری پایتون ۱٫۰۰۰ است.
+    ],
+  )
+  #v(1%)
+]))
 
 
 #let figure-2-1 = align(center, [
@@ -671,7 +873,7 @@
   #v(1%)
 ])
 
-#let figure-4-4 = align(center, [
+#let figure-4-6 = align(center, [
   #v(2.5%)
   #grouped-bars(
     (
@@ -685,7 +887,7 @@
   )
   #_caption(
     [
-      شکل ۴.۴: میانگین زمان پردازش به ازای هر واحد کار؛ پیکربندی‌های A و B به ازای هر فایل و پیکربندی‌های C و D به ازای هر تصمیم. بر روی همین مقیاس، میلهٔ پیکربندی A غیرقابل‌روئت است.
+      شکل ۴.۶: میانگین زمان پردازش به ازای هر واحد کار؛ پیکربندی‌های A و B به ازای هر فایل و پیکربندی‌های C و D به ازای هر تصمیم. بر روی همین مقیاس، میلهٔ پیکربندی A غیرقابل‌روئت است.
     ],
   )
   #v(1%)
